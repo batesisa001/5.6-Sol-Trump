@@ -957,10 +957,13 @@ export default function OnlineGame() {
                 ))}
             </div>
 
-            <div className={styles.felt}>
+            <div className={styles.felt} data-testid="game-table">
               <div className={styles.feltPattern} />
               {room.trumpCard && (
-                <aside className={styles.trumpCard}>
+                <aside
+                  className={styles.trumpCard}
+                  data-testid="trump-card"
+                >
                   <span>Trump</span>
                   <CardFace card={room.trumpCard} compact />
                 </aside>
@@ -1006,7 +1009,19 @@ export default function OnlineGame() {
                     styles.bidConsole,
                     isMyTurn && styles.mobileActionDock,
                   )}
+                  data-testid="bid-console"
                 >
+                  {isMyTurn && room.trumpCard && (
+                    <div
+                      className={styles.mobileBidTrump}
+                      aria-label={`Trump card: ${
+                        COLOR_META[room.trumpCard.color].label
+                      } ${room.trumpCard.rank}`}
+                    >
+                      <span>Trump</span>
+                      <CardFace card={room.trumpCard} compact />
+                    </div>
+                  )}
                   <span className={styles.phaseChip}>Bidding</span>
                   <h2>
                     {isMyTurn
@@ -1024,6 +1039,9 @@ export default function OnlineGame() {
                               type="button"
                               key={bid}
                               disabled={busy}
+                              aria-label={`Bid ${bid} ${
+                                bid === 1 ? "trick" : "tricks"
+                              }`}
                               onClick={() =>
                                 void sendAction({ type: "bid", bid })
                               }

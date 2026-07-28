@@ -1196,6 +1196,10 @@
   margin-top: 14px;
 }
 
+.mobileBidTrump {
+  display: none;
+}
+
 .turnBanner {
   position: relative;
   z-index: 4;
@@ -2310,7 +2314,7 @@ button.card:focus-visible {
   }
 
   .phaseBidding.myTurnPhase {
-    padding-bottom: min(46dvh, 360px);
+    padding-bottom: calc(160px + env(safe-area-inset-bottom));
   }
 
   .mobileActionDock {
@@ -2320,12 +2324,118 @@ button.card:focus-visible {
     bottom: 0;
     left: 8px;
     width: auto;
-    max-height: 52dvh;
     margin: 0;
-    padding: 14px 12px calc(12px + env(safe-area-inset-bottom));
-    overflow-y: auto;
+    padding: 8px 8px calc(7px + env(safe-area-inset-bottom));
+    overflow: hidden;
     border-radius: 15px 15px 0 0;
     box-shadow: 0 -14px 42px rgb(3 30 25 / 28%);
+  }
+
+  .mobileActionDock .phaseChip,
+  .mobileActionDock > p {
+    display: none;
+  }
+
+  .mobileActionDock h2 {
+    display: flex;
+    min-height: 44px;
+    margin: 0;
+    padding-right: 72px;
+    align-items: center;
+    font-size: 16px;
+    line-height: 1.15;
+    text-align: left;
+  }
+
+  .mobileBidTrump {
+    position: absolute;
+    z-index: 2;
+    top: 5px;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .mobileBidTrump > span {
+    color: #6f7f78;
+    font-size: 7px;
+    font-weight: 850;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .mobileBidTrump .cardCompact {
+    width: 32px;
+    height: 46px;
+    border-width: 2px;
+    border-radius: 5px;
+    box-shadow: 0 3px 8px rgb(0 0 0 / 16%);
+  }
+
+  .mobileBidTrump .cardCenter,
+  .mobileBidTrump .cardCornerBottom {
+    display: none;
+  }
+
+  .mobileBidTrump .cardCorner {
+    top: 4px;
+    left: 5px;
+  }
+
+  .mobileBidTrump .cardCorner strong {
+    font-size: 12px;
+  }
+
+  .mobileBidTrump .cardCorner i {
+    margin-top: 2px;
+    font-size: 7px;
+  }
+
+  .mobileActionDock .bidControls {
+    grid-template-columns: minmax(0, 1fr) 96px;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .mobileActionDock .bidControls > div {
+    display: flex;
+    padding-bottom: 2px;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 6px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+  }
+
+  .mobileActionDock .bidControls > div button {
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+    scroll-snap-align: start;
+  }
+
+  .mobileActionDock .boardButton {
+    min-height: 44px;
+    gap: 5px;
+  }
+
+  .mobileActionDock .boardButton > b {
+    font-size: 16px;
+  }
+
+  .mobileActionDock .boardButton small {
+    display: none;
+  }
+
+  .mobileActionDock .bidOrder {
+    margin-top: 5px;
+    padding-top: 5px;
+  }
+
+  .mobileActionDock .bidOrder > span {
+    min-height: 28px;
   }
 
   .phasePlaying .errorToast {
@@ -2333,7 +2443,7 @@ button.card:focus-visible {
   }
 
   .phaseBidding.myTurnPhase .errorToast {
-    bottom: min(48dvh, 380px);
+    bottom: calc(166px + env(safe-area-inset-bottom));
   }
 
   .errorToast {

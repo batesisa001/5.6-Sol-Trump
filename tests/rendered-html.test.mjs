@@ -90,6 +90,10 @@ test("removes starter-only UI and keeps core accessibility contracts", async () 
   assert.match(page, /getLegalCards/);
   assert.match(page, /window\.scrollTo/);
   assert.match(page, /mobileActionDock/);
+  assert.match(page, /data-testid="game-table"/);
+  assert.match(page, /data-testid="trump-card"/);
+  assert.match(page, /data-testid="bid-console"/);
+  assert.match(page, /mobileBidTrump/);
   assert.match(soloPage, /^"use client";/);
   assert.match(soloPage, /aria-modal="true"/);
   assert.match(soloPage, /getTrickWinner/);
@@ -97,6 +101,11 @@ test("removes starter-only UI and keeps core accessibility contracts", async () 
   assert.match(css, /@media \(max-width: 480px\)/);
   assert.match(onlineCss, /safe-area-inset-bottom/);
   assert.match(onlineCss, /\.phasePlaying \.myHand/);
+  assert.match(
+    onlineCss,
+    /\.mobileActionDock \.bidControls > div[\s\S]*?flex-wrap:\s*nowrap/,
+  );
+  assert.doesNotMatch(onlineCss, /max-height:\s*52dvh/);
   assert.match(onlineCss, /min-height:\s*44px/);
   assert.match(layout, /High Trump — A Rook-style trick-taking game/);
   assert.doesNotMatch(
