@@ -27,6 +27,7 @@ const COLOR_META: Record<
 };
 
 type ConnectionState = "connected" | "syncing" | "offline";
+type EntryMode = "create" | "join";
 
 class ApiError extends Error {
   readonly status: number;
@@ -210,6 +211,7 @@ export default function OnlineGame() {
   const [roomCode, setRoomCode] = useState("");
   const [playerCount, setPlayerCount] = useState(4);
   const [maxHand, setMaxHand] = useState(7);
+  const [entryMode, setEntryMode] = useState<EntryMode>("create");
   const [busy, setBusy] = useState(false);
   const [connection, setConnection] =
     useState<ConnectionState>("connected");
@@ -219,6 +221,10 @@ export default function OnlineGame() {
   const tokenRef = useRef(playerToken);
   const pollInFlight = useRef(false);
   const sessionGenerationRef = useRef(0);
+  const previousViewRef = useRef("entry");
+  const currentViewKey = room
+    ? `${room.code}:${room.phase}:${room.roundIndex}`
+    : "entry";
 
   useEffect(() => {
     roomRef.current = room;
@@ -226,6 +232,16 @@ export default function OnlineGame() {
   useEffect(() => {
     tokenRef.current = playerToken;
   }, [playerToken]);
+  useEffect(() => {
+    if (previousViewRef.current !== currentViewKey) {
+      const frame = window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, left: 0 });
+      });
+      previousViewRef.current = currentViewKey;
+      return () => window.cancelAnimationFrame(frame);
+    }
+    previousViewRef.current = currentViewKey;
+  }, [currentViewKey]);
 
   const maxAllowed = Math.min(18, getMaxHandSize(playerCount));
 
@@ -295,6 +311,7 @@ export default function OnlineGame() {
       if (!requestedCode) return;
 
       setRoomCode(requestedCode);
+      setEntryMode("join");
       const savedToken = localStorage.getItem(sessionKey(requestedCode));
       if (savedToken) {
         tokenRef.current = savedToken;
@@ -499,7 +516,12 @@ export default function OnlineGame() {
 
   if (!room) {
     return (
-      <main className={styles.entryPage}>
+      <main
+        className={joinClasses(
+          styles.entryPage,
+          entryMode === "join" && styles.joinEntryPage,
+        )}
+      >
         <div className={styles.ambientOne} />
         <div className={styles.ambientTwo} />
         <header className={styles.entryHeader}>
@@ -537,7 +559,31 @@ export default function OnlineGame() {
           </div>
 
           <div className={styles.entryPanels}>
-            <section className={styles.entryPanel}>
+            <nav className={styles.entryModeTabs} aria-label="Choose game setup">
+              <button
+                type="button"
+                className={entryMode === "create" ? styles.active : ""}
+                aria-pressed={entryMode === "create"}
+                onClick={() => setEntryMode("create")}
+              >
+                Create
+              </button>
+              <button
+                type="button"
+                className={entryMode === "join" ? styles.active : ""}
+                aria-pressed={entryMode === "join"}
+                onClick={() => setEntryMode("join")}
+              >
+                Join with code
+              </button>
+            </nav>
+
+            <section
+              className={joinClasses(
+                styles.entryPanel,
+                entryMode !== "create" && styles.mobilePanelHidden,
+              )}
+            >
               <span className={styles.panelNumber}>01</span>
               <h2>Create a table</h2>
               <p>You host the game and choose when to deal.</p>
@@ -604,7 +650,13 @@ export default function OnlineGame() {
               </button>
             </section>
 
-            <section className={joinClasses(styles.entryPanel, styles.joinPanel)}>
+            <section
+              className={joinClasses(
+                styles.entryPanel,
+                styles.joinPanel,
+                entryMode !== "join" && styles.mobilePanelHidden,
+              )}
+            >
               <span className={styles.panelNumber}>02</span>
               <h2>Join a table</h2>
               <p>Enter the code the host sent you.</p>
@@ -696,7 +748,14 @@ export default function OnlineGame() {
       : room.players.filter((player) => player.score === highScore);
 
   return (
-    <main className={styles.gamePage}>
+    <main
+      className={joinClasses(
+        styles.gamePage,
+        room.phase === "bidding" && styles.phaseBidding,
+        room.phase === "playing" && styles.phasePlaying,
+        isMyTurn && styles.myTurnPhase,
+      )}
+    >
       <div className={styles.liveRegion} aria-live="polite">
         {message ||
           (currentPlayer
@@ -737,7 +796,10 @@ export default function OnlineGame() {
             className={joinClasses(
               styles.connection,
               connection === "offline" && styles.connectionOffline,
+              connection !== "connected" && styles.connectionAttention,
             )}
+            aria-label={`Connection: ${connection}`}
+            title={`Connection: ${connection}`}
           >
             <i />
             {connection === "connected"
@@ -939,7 +1001,12 @@ export default function OnlineGame() {
               </section>
 
               {room.phase === "bidding" && (
-                <section className={styles.bidConsole}>
+                <section
+                  className={joinClasses(
+                    styles.bidConsole,
+                    isMyTurn && styles.mobileActionDock,
+                  )}
+                >
                   <span className={styles.phaseChip}>Bidding</span>
                   <h2>
                     {isMyTurn
@@ -1149,7 +1216,7 @@ export default function OnlineGame() {
                     <CardFace
                       key={card.id}
                       card={card}
-                      disabled={!playable}
+                      disabled={!playable || busy}
                       onPlay={
                         playable
                           ? () =>

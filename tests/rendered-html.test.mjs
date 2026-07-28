@@ -39,6 +39,7 @@ test("server-renders multiplayer as the High Trump home screen", async () => {
   assert.match(html, /Create a table/);
   assert.match(html, /Create share code/);
   assert.match(html, /Join a table/);
+  assert.match(html, /Join with code/);
   assert.match(html, /six-character code/i);
   assert.match(html, /Play solo/);
   assert.match(html, /href="\/solo"/);
@@ -71,22 +72,32 @@ test("keeps the previous multiplayer route working", async () => {
 });
 
 test("removes starter-only UI and keeps core accessibility contracts", async () => {
-  const [page, soloPage, css, layout, packageJson] = await Promise.all([
-    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/solo/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
-    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../package.json", import.meta.url), "utf8"),
-  ]);
+  const [page, soloPage, css, onlineCss, layout, packageJson] =
+    await Promise.all([
+      readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../app/solo/page.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+      readFile(
+        new URL("../app/online/online.module.css", import.meta.url),
+        "utf8",
+      ),
+      readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../package.json", import.meta.url), "utf8"),
+    ]);
 
   assert.match(page, /^"use client";/);
   assert.match(page, /aria-live="polite"/);
   assert.match(page, /getLegalCards/);
+  assert.match(page, /window\.scrollTo/);
+  assert.match(page, /mobileActionDock/);
   assert.match(soloPage, /^"use client";/);
   assert.match(soloPage, /aria-modal="true"/);
   assert.match(soloPage, /getTrickWinner/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.match(css, /@media \(max-width: 480px\)/);
+  assert.match(onlineCss, /safe-area-inset-bottom/);
+  assert.match(onlineCss, /\.phasePlaying \.myHand/);
+  assert.match(onlineCss, /min-height:\s*44px/);
   assert.match(layout, /High Trump — A Rook-style trick-taking game/);
   assert.doesNotMatch(
     `${page}\n${soloPage}\n${layout}\n${packageJson}`,

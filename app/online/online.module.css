@@ -7,12 +7,22 @@
   --felt: #174d42;
   --felt-deep: #0c342e;
   min-height: 100vh;
+  min-height: 100svh;
+  min-height: 100dvh;
   color: var(--ink);
   background:
     radial-gradient(circle at 8% 12%, rgb(242 191 77 / 14%), transparent 30%),
     radial-gradient(circle at 90% 5%, rgb(68 144 125 / 18%), transparent 28%),
     #f3ecdc;
   font-family: var(--font-geist-sans), Arial, sans-serif;
+}
+
+.entryPage button,
+.entryPage a,
+.entryPage input,
+.gamePage button,
+.gamePage a {
+  touch-action: manipulation;
 }
 
 .entryPage {
@@ -215,6 +225,10 @@
   background: rgb(255 253 247 / 86%);
   box-shadow: 0 30px 80px rgb(34 55 47 / 13%);
   backdrop-filter: blur(20px);
+}
+
+.entryModeTabs {
+  display: none;
 }
 
 .entryPanel {
@@ -1767,41 +1781,217 @@ button.card:focus-visible {
 
 @media (max-width: 680px) {
   .entryPage {
-    padding: 0 16px 38px;
+    padding:
+      env(safe-area-inset-top)
+      12px
+      calc(24px + env(safe-area-inset-bottom));
   }
 
   .entryHeader {
-    min-height: 70px;
+    min-height: 60px;
+    gap: 12px;
+  }
+
+  .entryHeader .brandMark {
+    width: 36px;
+    height: 42px;
+  }
+
+  .entryHeader .brand strong {
+    font-size: 18px;
+  }
+
+  .backLink {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    padding: 0 4px;
+  }
+
+  .entryHero {
+    min-height: auto;
+    padding: 8px 0 0;
+    align-items: start;
+    gap: 14px;
   }
 
   .heroCopy {
-    padding-top: 16px;
+    padding: 8px 4px 0;
+  }
+
+  .heroCopy .eyebrow {
+    font-size: 9px;
   }
 
   .heroCopy h1 {
-    font-size: clamp(42px, 14vw, 60px);
+    margin: 11px 0 13px;
+    font-size: clamp(36px, 10.5vw, 44px);
+    line-height: 0.94;
+  }
+
+  .heroCopy h1 em {
+    margin-top: 4px;
   }
 
   .heroCopy > p {
-    font-size: 16px;
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.45;
   }
 
-  .entryPanel {
-    padding: 27px 22px;
-  }
-
-  .gameHeader {
-    min-height: 64px;
-    padding: 0 13px;
-  }
-
-  .gameHeader .brand > span:last-child,
-  .connection {
+  .trustRow {
     display: none;
   }
 
+  .joinEntryPage .heroCopy {
+    display: none;
+  }
+
+  .entryPanels {
+    border-radius: 16px;
+  }
+
+  .entryModeTabs {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    margin: 12px 12px 2px;
+    padding: 4px;
+    border: 1px solid #d5ddd6;
+    border-radius: 12px;
+    background: #edf0e9;
+  }
+
+  .entryModeTabs button {
+    min-height: 44px;
+    padding: 0 12px;
+    color: #557068;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+  .entryModeTabs button.active {
+    color: #fff;
+    background: #174d42;
+    box-shadow: 0 4px 12px rgb(23 77 66 / 20%);
+  }
+
+  .mobilePanelHidden {
+    display: none;
+  }
+
+  .entryPanel {
+    padding: 12px 18px 20px;
+  }
+
+  .entryPanel h2 {
+    margin-top: 9px;
+    font-size: 28px;
+  }
+
+  .entryPanel > p {
+    min-height: 0;
+    margin-bottom: 15px;
+  }
+
+  .joinPanel {
+    border-top: 0;
+  }
+
+  .field,
+  .rangeField {
+    margin: 14px 0;
+  }
+
+  .field input {
+    min-height: 48px;
+    font-size: 16px;
+  }
+
+  .field .codeInput {
+    height: 58px;
+    font-size: 25px;
+  }
+
+  .segmented button {
+    min-height: 44px;
+  }
+
+  .rangeField input {
+    min-height: 30px;
+  }
+
+  .primaryButton,
+  .secondaryButton {
+    min-height: 52px;
+    margin-top: 16px;
+  }
+
+  .joinNote {
+    margin-top: 18px;
+    padding-top: 16px;
+  }
+
+  .gameHeader {
+    position: sticky;
+    z-index: 60;
+    top: 0;
+    min-height: calc(58px + env(safe-area-inset-top));
+    padding:
+      env(safe-area-inset-top)
+      11px
+      0;
+    gap: 8px;
+  }
+
+  .gameHeader .brand > span:last-child {
+    display: none;
+  }
+
+  .gameHeader .brandMark {
+    width: 36px;
+    height: 40px;
+  }
+
+  .connection {
+    display: inline-flex;
+    width: 16px;
+    min-height: 44px;
+    justify-content: center;
+    gap: 0;
+    font-size: 0;
+  }
+
+  .connection i {
+    flex: 0 0 auto;
+  }
+
+  .connectionAttention {
+    width: auto;
+    padding: 0 4px;
+    gap: 6px;
+    font-size: 10px;
+  }
+
+  .headerActions {
+    gap: 8px;
+  }
+
+  .headerActions button {
+    min-height: 44px;
+    padding: 0 4px;
+    font-size: 12px;
+  }
+
   .codePill {
+    min-height: 44px;
     gap: 7px;
+    padding: 6px 10px;
   }
 
   .codePill small,
@@ -1815,61 +2005,161 @@ button.card:focus-visible {
 
   .lobby {
     width: calc(100% - 28px);
-    padding: 34px 0;
+    min-height: auto;
+    padding: 20px 0 calc(28px + env(safe-area-inset-bottom));
+    align-items: start;
+    gap: 18px;
   }
 
   .lobbyIntro h1 {
-    font-size: 43px;
+    margin: 10px 0;
+    font-size: 34px;
+  }
+
+  .lobbyIntro > p {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .shareCard {
+    max-width: none;
+    margin-top: 16px;
+    padding: 14px;
+  }
+
+  .shareCard strong {
+    font-size: 25px;
+  }
+
+  .shareCard button {
+    min-height: 44px;
   }
 
   .seatGrid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 15px 0;
   }
 
   .lobbyTable {
-    padding: 22px 16px;
+    padding: 16px;
   }
 
   .lobbyTable > header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 5px;
+    align-items: flex-end;
+    flex-direction: row;
+    gap: 10px;
+    padding-bottom: 14px;
+  }
+
+  .seat {
+    grid-template-columns: 32px minmax(0, 1fr);
+    min-height: 52px;
+    gap: 8px;
+    padding: 7px 8px;
+  }
+
+  .seat > span,
+  .seat .avatar {
+    width: 32px;
+    height: 32px;
+    font-size: 13px;
+  }
+
+  .seat > b {
+    display: none;
+  }
+
+  .seat strong {
+    font-size: 11px;
+  }
+
+  .seat small {
+    font-size: 8px;
   }
 
   .gameGrid {
-    width: calc(100% - 18px);
-    padding-top: 8px;
+    display: flex;
+    width: 100%;
+    padding: 0 9px calc(20px + env(safe-area-inset-bottom));
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .tableColumn {
+    order: 1;
+    width: 100%;
+  }
+
+  .scoreboard {
+    order: 2;
+    width: 100%;
+    border-radius: 11px;
+  }
+
+  .scoreboard > header,
+  .scoreboard > footer {
+    display: none;
   }
 
   .roundBar {
+    position: sticky;
+    z-index: 35;
+    top: calc(58px + env(safe-area-inset-top));
+    min-height: 38px;
+    margin: 0 -9px;
+    padding: 0 9px;
     flex-wrap: wrap;
     gap: 7px;
+    background: rgb(239 233 220 / 96%);
+    box-shadow: 0 4px 12px rgb(46 61 55 / 8%);
+    backdrop-filter: blur(12px);
   }
 
   .opponents {
     display: flex;
+    margin: 7px 0;
+    padding: 2px 1px;
     overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
   }
 
   .opponent {
-    min-width: 150px;
+    min-width: 142px;
+    min-height: 50px;
+    scroll-snap-align: start;
+  }
+
+  .opponent strong {
+    font-size: 11px;
+  }
+
+  .opponent small {
+    font-size: 9px;
   }
 
   .felt {
-    min-height: 500px;
-    border-width: 6px;
-    border-radius: 18px;
+    min-height: 352px;
+    border-width: 4px;
+    border-radius: 16px;
   }
 
   .trumpCard {
-    top: 13px;
-    left: 13px;
+    top: 10px;
+    left: 10px;
+  }
+
+  .trumpCard .cardCompact {
+    width: 52px;
+    height: 75px;
   }
 
   .trickArea {
     width: 100%;
-    min-height: 300px;
-    padding: 55px 6px 20px;
+    min-height: 225px;
+    padding: 48px 5px 12px;
   }
 
   .playedCards {
@@ -1877,58 +2167,186 @@ button.card:focus-visible {
   }
 
   .playedCards .cardCompact {
-    width: 55px;
-    height: 79px;
+    width: clamp(44px, 13vw, 51px);
+    height: auto;
+    aspect-ratio: 69 / 99;
+  }
+
+  .playedCards small {
+    max-width: 51px;
+    font-size: 7px;
+  }
+
+  .emptyTrick strong {
+    font-size: 22px;
+  }
+
+  .emptyTrick small {
+    max-width: 190px;
+    font-size: 9px;
+    line-height: 1.4;
   }
 
   .bidConsole,
   .resultPanel {
     width: calc(100% - 18px);
-    padding: 17px 12px;
+    margin-bottom: 12px;
+    padding: 14px 10px;
+  }
+
+  .bidConsole h2,
+  .resultPanel h2 {
+    font-size: 19px;
   }
 
   .bidControls {
     grid-template-columns: 1fr;
+    margin-top: 11px;
+  }
+
+  .bidControls > div {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(44px, 1fr));
+  }
+
+  .bidControls > div button {
+    width: auto;
+    height: 44px;
   }
 
   .bidOrder {
     overflow-x: auto;
     justify-content: flex-start;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
   }
 
   .bidOrder > span {
     flex: 0 0 auto;
+    min-height: 32px;
+    scroll-snap-align: start;
   }
 
   .myHand {
+    margin-top: 7px;
     padding-right: 8px;
     padding-left: 8px;
   }
 
   .myHand > header {
-    align-items: flex-start;
-    flex-direction: column;
+    min-height: 40px;
+    align-items: center;
+    flex-direction: row;
+    gap: 8px;
   }
 
   .myHand header p {
-    align-self: stretch;
+    max-width: 48%;
+    align-self: center;
+    padding: 5px 7px;
+    font-size: 10px;
+    line-height: 1.3;
+    text-align: right;
   }
 
   .handScroller {
+    min-height: 118px;
+    margin-top: 4px;
+    padding: 6px 5px 3px;
     justify-content: flex-start;
+    gap: 8px;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
   }
 
   .scoreboard > div {
-    grid-template-columns: 1fr;
+    display: flex;
+    padding: 6px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+  }
+
+  .scoreboard article {
+    min-width: 140px;
+    min-height: 46px;
+    flex: 0 0 140px;
+    border-right: 1px solid #e4e3db;
+    border-bottom: 0;
+    scroll-snap-align: start;
   }
 
   .card {
-    width: 78px;
-    height: 112px;
+    width: 72px;
+    height: 104px;
+    scroll-snap-align: start;
   }
 
   .cardCenter {
-    inset: 23px 11px;
+    inset: 21px 10px;
+  }
+
+  button.card:active:not(:disabled) {
+    transform: translateY(-4px);
+  }
+
+  .phasePlaying {
+    padding-bottom: calc(178px + env(safe-area-inset-bottom));
+  }
+
+  .phasePlaying .myHand {
+    position: fixed;
+    z-index: 55;
+    right: 8px;
+    bottom: 0;
+    left: 8px;
+    max-height: calc(42dvh + env(safe-area-inset-bottom));
+    margin: 0;
+    padding: 8px 8px calc(7px + env(safe-area-inset-bottom));
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -12px 36px rgb(15 43 35 / 22%);
+  }
+
+  .phaseBidding.myTurnPhase {
+    padding-bottom: min(46dvh, 360px);
+  }
+
+  .mobileActionDock {
+    position: fixed;
+    z-index: 58;
+    right: 8px;
+    bottom: 0;
+    left: 8px;
+    width: auto;
+    max-height: 52dvh;
+    margin: 0;
+    padding: 14px 12px calc(12px + env(safe-area-inset-bottom));
+    overflow-y: auto;
+    border-radius: 15px 15px 0 0;
+    box-shadow: 0 -14px 42px rgb(3 30 25 / 28%);
+  }
+
+  .phasePlaying .errorToast {
+    bottom: calc(184px + env(safe-area-inset-bottom));
+  }
+
+  .phaseBidding.myTurnPhase .errorToast {
+    bottom: min(48dvh, 380px);
+  }
+
+  .errorToast {
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: 12px;
+    max-width: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .heroCopy {
+    display: none;
   }
 }
 
