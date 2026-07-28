@@ -4,13 +4,13 @@ import test from "node:test";
 
 const templateRoot = new URL("../", import.meta.url);
 
-async function render() {
+async function render(pathname = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", {
+    new Request(`http://localhost${pathname}`, {
       headers: { accept: "text/html" },
     }),
     {
@@ -37,9 +37,22 @@ test("server-renders the finished High Trump setup screen", async () => {
   );
   assert.match(html, /Every bid is a promise/);
   assert.match(html, /Set the stakes/);
-  assert.match(html, /Deal the first round/);
+  assert.match(html, /Play solo/);
+  assert.match(html, /Play online with a share code/);
   assert.match(html, /Yellow 2/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);
+});
+
+test("server-renders the multiplayer create and join experience", async () => {
+  const response = await render("/online");
+  assert.equal(response.status, 200);
+
+  const html = await response.text();
+  assert.match(html, /Live multiplayer/);
+  assert.match(html, /Create a table/);
+  assert.match(html, /Create share code/);
+  assert.match(html, /Join a table/);
+  assert.match(html, /six-character code/i);
 });
 
 test("removes starter-only UI and keeps core accessibility contracts", async () => {

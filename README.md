@@ -1,7 +1,14 @@
 # High Trump
 
-High Trump is a local, single-player Rook-style trick-taking game for one human
-and two to five computer opponents.
+High Trump is a Rook-style trick-taking game with two ways to play:
+
+- Solo against two to five computer opponents.
+- Live multiplayer for two to six people using a six-character share code.
+
+Multiplayer rooms are server-authoritative and stored in D1. Each browser
+receives only its own hand, while bids, turns, tricks, and scores stay
+synchronized for the whole table. A device-local reconnect key restores the
+same seat after a refresh.
 
 ## Game rules
 
@@ -31,6 +38,9 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+The solo game is at `/`; multiplayer creation and joining are at `/online`.
+Local multiplayer uses the D1 binding declared in `.openai/hosting.json`.
+
 ## Verify
 
 ```bash
@@ -39,5 +49,6 @@ npm test
 
 The test suite checks the complete deck, deal accounting, round schedule,
 follow-color and trump-breaking legality, opening-leader precedence, trick
-precedence, all scoring branches, ordered bidding, AI legality, and the rendered
-setup screen.
+precedence, all scoring branches, ordered bidding, AI legality, authoritative
+multiplayer transitions, private-hand projections, and the rendered solo and
+multiplayer setup screens.

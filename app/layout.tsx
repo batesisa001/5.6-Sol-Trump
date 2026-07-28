@@ -10,7 +10,7 @@ const geistSans = Geist({
 
 const title = "High Trump — A Rook-style trick-taking game";
 const description =
-  "Bid your tricks, follow the lead, master the trump color, and beware the unbeatable Yellow 2.";
+  "Play High Trump solo or live with friends using a share code. Bid your tricks, master trump, and beware the unbeatable Yellow 2.";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();

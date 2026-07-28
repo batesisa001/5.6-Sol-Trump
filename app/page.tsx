@@ -1062,16 +1062,26 @@ export default function Home() {
               </div>
             </div>
 
-            <button
-              type="button"
-              className="primary-button deal-button"
-              onClick={startGame}
-            >
-              <span>Deal the first round</span>
-              <b aria-hidden="true">→</b>
-            </button>
+            <div className="setup-action-stack">
+              <button
+                type="button"
+                className="primary-button deal-button"
+                onClick={startGame}
+              >
+                <span>Play solo</span>
+                <b aria-hidden="true">→</b>
+              </button>
+              <a
+                className="secondary-button online-deal-button"
+                href="/online"
+              >
+                <span>Play online with a share code</span>
+                <b aria-hidden="true">↗</b>
+              </a>
+            </div>
             <p className="setup-footnote">
-              Bidding rotates each round. The high bid opens the first trick.
+              Solo includes computer players. Online gives every player a
+              private hand.
             </p>
           </section>
         </div>
