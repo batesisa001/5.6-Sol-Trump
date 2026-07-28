@@ -1,192 +1,164 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
-  buildRoundSchedule,
-  chooseAiBid,
-  chooseAiCard,
-  dealRound,
-  doesPlayBreakTrump,
   getLeadColor,
   getLegalCards,
   getMaxHandSize,
-  getOpeningLeaderIndex,
-  getTrickWinner,
-  scoreBid,
-  sortHand,
   type Bid,
   type Card,
   type Color,
-  type PlayedCard,
 } from "@/lib/game-engine";
-
-type Phase =
-  | "setup"
-  | "bidding"
-  | "playing"
-  | "trick-result"
-  | "round-result"
-  | "game-over";
-
-interface Player {
-  id: number;
-  name: string;
-  isHuman: boolean;
-  score: number;
-  bid: Bid | null;
-  tricks: number;
-  hand: Card[];
-  lastDelta: number | null;
-}
-
-interface BidLogEntry {
-  playerIndex: number;
-  bid: Bid;
-}
-
-interface RoundResult {
-  playerIndex: number;
-  name: string;
-  bid: Bid;
-  tricks: number;
-  delta: number;
-  previousTotal: number;
-  total: number;
-}
-
-interface GameSettings {
-  playerName: string;
-  playerCount: number;
-  maxHand: number;
-}
-
-const AI_NAMES = ["Mara", "Theo", "Ivy", "Otis", "June"];
+import type {
+  OnlineRoomAction,
+  OnlineRoomView,
+} from "@/lib/multiplayer-engine";
+import styles from "./online/online.module.css";
 
 const COLOR_META: Record<
   Color,
-  { label: string; symbol: string; short: string }
+  { label: string; symbol: string }
 > = {
-  black: { label: "Black", symbol: "●", short: "B" },
-  red: { label: "Red", symbol: "◆", short: "R" },
-  green: { label: "Green", symbol: "▲", short: "G" },
-  yellow: { label: "Yellow", symbol: "✦", short: "Y" },
+  black: { label: "Black", symbol: "●" },
+  red: { label: "Red", symbol: "◆" },
+  green: { label: "Green", symbol: "▲" },
+  yellow: { label: "Yellow", symbol: "✦" },
 };
 
-const DEFAULT_SETTINGS: GameSettings = {
-  playerName: "You",
-  playerCount: 4,
-  maxHand: 7,
-};
+type ConnectionState = "connected" | "syncing" | "offline";
 
-function rotateOrder(playerCount: number, start: number) {
+class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly room?: OnlineRoomView;
+
+  constructor(
+    message: string,
+    status: number,
+    code: string,
+    room?: OnlineRoomView,
+  ) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+    this.room = room;
+  }
+}
+
+function joinClasses(
+  ...values: Array<string | false | null | undefined>
+): string {
+  return values.filter(Boolean).join(" ");
+}
+
+function displayBid(bid: Bid | null): string {
+  if (bid === null) return "—";
+  return bid === "BOARD" ? "Board" : String(bid);
+}
+
+function rotateOrder(playerCount: number, start: number): number[] {
   return Array.from(
     { length: playerCount },
     (_, offset) => (start + offset) % playerCount,
   );
 }
 
-function displayBid(bid: Bid | null) {
-  if (bid === null) return "—";
-  return bid === "BOARD" ? "Board" : String(bid);
+function createPlayerToken(): string {
+  const values = new Uint8Array(24);
+  crypto.getRandomValues(values);
+  return Array.from(values, (value) =>
+    value.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
-function scoreExplanation(bid: Bid, tricks: number, handSize: number) {
-  if (bid === "BOARD") {
-    return tricks === handSize
-      ? "Board made · +20"
-      : `Board missed · ${tricks}/${handSize} tricks`;
-  }
-
-  if (tricks < bid) {
-    return `${bid - tricks} trick${bid - tricks === 1 ? "" : "s"} short`;
-  }
-
-  const overtricks = tricks - bid;
-  return overtricks > 0
-    ? `${bid} × 3 + ${overtricks} over`
-    : `${bid} × 3 · bid made`;
+function createActionId(): string {
+  return crypto.randomUUID().replaceAll("-", "");
 }
 
-function describeTrickWin(
-  winner: PlayedCard,
-  trick: readonly PlayedCard[],
-  trump: Color,
-) {
-  if (winner.card.color === "yellow" && winner.card.rank === 2) {
-    return "Yellow 2 takes all";
-  }
+function sessionKey(code: string): string {
+  return `high-trump:multiplayer:${code}`;
+}
 
-  const lead = trick[0]?.card.color;
-  if (winner.card.color === trump && lead !== trump) {
-    return `${COLOR_META[trump].label} trump`;
-  }
+async function requestJson<T>(
+  path: string,
+  playerToken: string,
+  init?: RequestInit,
+): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json",
+      "x-high-trump-player": playerToken,
+      ...(init?.headers ?? {}),
+    },
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    error?: string;
+    code?: string;
+    room?: OnlineRoomView;
+  } & T;
 
-  return `High ${COLOR_META[winner.card.color].label}`;
+  if (!response.ok) {
+    throw new ApiError(
+      payload.error ?? "The table could not be reached.",
+      response.status,
+      payload.code ?? "REQUEST_FAILED",
+      payload.room,
+    );
+  }
+  return payload;
 }
 
 function CardFace({
   card,
   compact = false,
-  selected = false,
   disabled = false,
-  unavailableReason,
-  onSelect,
-  delay = 0,
+  onPlay,
 }: {
   card: Card;
   compact?: boolean;
-  selected?: boolean;
   disabled?: boolean;
-  unavailableReason?: string;
-  onSelect?: () => void;
-  delay?: number;
+  onPlay?: () => void;
 }) {
   const meta = COLOR_META[card.color];
-  const isCrown = card.color === "yellow" && card.rank === 2;
-  const className = [
-    "rook-card",
-    `card-${card.color}`,
-    compact ? "rook-card-compact" : "",
-    selected ? "is-selected" : "",
-    disabled ? "is-disabled" : "",
-    isCrown ? "is-crown" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const label = `${meta.label} ${card.rank}${
-    isCrown ? ", highest card in the deck" : ""
-  }${disabled && unavailableReason ? `, unavailable: ${unavailableReason}` : ""}`;
+  const isYellowTwo = card.color === "yellow" && card.rank === 2;
+  const className = joinClasses(
+    styles.card,
+    styles[`card${card.color[0].toUpperCase()}${card.color.slice(1)}`],
+    compact && styles.cardCompact,
+    disabled && styles.cardUnavailable,
+    isYellowTwo && styles.cardCrown,
+  );
   const content = (
     <>
-      <span className="card-corner card-corner-top" aria-hidden="true">
+      <span className={styles.cardCorner}>
         <strong>{card.rank}</strong>
-        <span>{meta.symbol}</span>
+        <i>{meta.symbol}</i>
       </span>
-      <span className="card-center" aria-hidden="true">
-        {isCrown && <span className="crown-mark">♛</span>}
-        <span className="card-emblem">{meta.symbol}</span>
-        <span className="card-color-name">{meta.label}</span>
-        {isCrown && <span className="highest-ribbon">Highest</span>}
+      <span className={styles.cardCenter}>
+        {isYellowTwo && <b>♛</b>}
+        <i>{meta.symbol}</i>
+        <small>{meta.label}</small>
+        {isYellowTwo && <em>Highest</em>}
       </span>
-      <span className="card-corner card-corner-bottom" aria-hidden="true">
+      <span className={joinClasses(styles.cardCorner, styles.cardCornerBottom)}>
         <strong>{card.rank}</strong>
-        <span>{meta.symbol}</span>
+        <i>{meta.symbol}</i>
       </span>
     </>
   );
 
-  if (onSelect) {
+  if (onPlay) {
     return (
       <button
         type="button"
         className={className}
-        aria-label={label}
-        aria-pressed={selected}
+        onClick={onPlay}
         disabled={disabled}
-        title={disabled ? unavailableReason : label}
-        onClick={onSelect}
-        style={{ "--deal-delay": `${delay}ms` } as React.CSSProperties}
+        aria-label={`Play ${meta.label} ${card.rank}`}
       >
         {content}
       </button>
@@ -197,1149 +169,797 @@ function CardFace({
     <div
       className={className}
       role="img"
-      aria-label={label}
-      style={{ "--deal-delay": `${delay}ms` } as React.CSSProperties}
+      aria-label={`${meta.label} ${card.rank}`}
     >
       {content}
     </div>
   );
 }
 
-function CardBack({ small = false }: { small?: boolean }) {
-  return (
-    <span
-      className={`card-back ${small ? "card-back-small" : ""}`}
-      aria-hidden="true"
-    >
-      <span className="card-back-inset">
-        <i />
-        <b>H</b>
-        <i />
-      </span>
-    </span>
-  );
-}
-
-function SuitChip({ color, label = true }: { color: Color; label?: boolean }) {
+function SuitChip({ color }: { color: Color }) {
   const meta = COLOR_META[color];
   return (
-    <span className={`suit-chip suit-${color}`}>
-      <span aria-hidden="true">{meta.symbol}</span>
-      {label && <strong>{meta.label}</strong>}
+    <span
+      className={joinClasses(
+        styles.suitChip,
+        styles[`suit${color[0].toUpperCase()}${color.slice(1)}`],
+      )}
+    >
+      <i>{meta.symbol}</i>
+      {meta.label}
     </span>
   );
 }
 
-function ModalLayer({
-  children,
-  onClose,
-  strong = false,
-}: {
-  children: React.ReactNode;
-  onClose?: () => void;
-  strong?: boolean;
-}) {
-  const backdropRef = useRef<HTMLDivElement>(null);
-  const onCloseRef = useRef(onClose);
+function EmptySeat({ number }: { number: number }) {
+  return (
+    <article className={joinClasses(styles.seat, styles.emptySeat)}>
+      <span>{number}</span>
+      <div>
+        <strong>Open seat</strong>
+        <small>Waiting for a player</small>
+      </div>
+    </article>
+  );
+}
+
+export default function OnlineGame() {
+  const [room, setRoom] = useState<OnlineRoomView | null>(null);
+  const [playerToken, setPlayerToken] = useState("");
+  const [name, setName] = useState("");
+  const [roomCode, setRoomCode] = useState("");
+  const [playerCount, setPlayerCount] = useState(4);
+  const [maxHand, setMaxHand] = useState(7);
+  const [busy, setBusy] = useState(false);
+  const [connection, setConnection] =
+    useState<ConnectionState>("connected");
+  const [message, setMessage] = useState("");
+  const [copied, setCopied] = useState(false);
+  const roomRef = useRef(room);
+  const tokenRef = useRef(playerToken);
+  const pollInFlight = useRef(false);
+  const sessionGenerationRef = useRef(0);
 
   useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
-
+    roomRef.current = room;
+  }, [room]);
   useEffect(() => {
-    const backdrop = backdropRef.current;
-    const dialog = backdrop?.querySelector<HTMLElement>(
-      '[role="dialog"], [role="alertdialog"]',
-    );
-    const page = document.querySelector<HTMLElement>("main");
-    const previousFocus =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    const previousOverflow = document.body.style.overflow;
-    page?.setAttribute("inert", "");
-    document.body.style.overflow = "hidden";
+    tokenRef.current = playerToken;
+  }, [playerToken]);
 
-    const focusableSelector =
-      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-    const focusable = () =>
-      dialog
-        ? Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
-        : [];
-    const frame = window.requestAnimationFrame(() => {
-      const targets = focusable();
-      (targets[0] ?? dialog)?.focus();
-    });
+  const maxAllowed = Math.min(18, getMaxHandSize(playerCount));
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && onCloseRef.current) {
-        event.preventDefault();
-        onCloseRef.current();
-        return;
-      }
+  const acceptRoom = useCallback((nextRoom: OnlineRoomView) => {
+    const currentRoom = roomRef.current;
+    if (
+      currentRoom?.code === nextRoom.code &&
+      currentRoom.revision > nextRoom.revision
+    ) {
+      return false;
+    }
 
-      if (event.key !== "Tab") return;
-      const targets = focusable();
-      if (targets.length === 0) {
-        event.preventDefault();
-        dialog?.focus();
-        return;
-      }
-
-      const first = targets[0];
-      const last = targets[targets.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      document.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = previousOverflow;
-      page?.removeAttribute("inert");
-      previousFocus?.focus();
-    };
+    roomRef.current = nextRoom;
+    setRoom(nextRoom);
+    return true;
   }, []);
 
-  if (typeof document === "undefined") return null;
-
-  return createPortal(
-    <div
-      ref={backdropRef}
-      className={`modal-backdrop ${strong ? "modal-backdrop-strong" : ""}`}
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onCloseRef.current?.();
+  const loadRoom = useCallback(
+    async (code: string, token: string, quiet = false) => {
+      const sessionGeneration = sessionGenerationRef.current;
+      if (!quiet) setConnection("syncing");
+      try {
+        const payload = await requestJson<{ room: OnlineRoomView }>(
+          `/api/rooms/${encodeURIComponent(code)}`,
+          token,
+        );
+        if (
+          sessionGeneration !== sessionGenerationRef.current ||
+          tokenRef.current !== token
+        ) {
+          return false;
         }
-      }}
-    >
-      {children}
-    </div>,
-    document.body,
-  );
-}
-
-function RulesDialog({ onClose }: { onClose: () => void }) {
-  return (
-    <ModalLayer onClose={onClose}>
-      <section
-        className="rules-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="rules-title"
-        tabIndex={-1}
-      >
-        <header className="dialog-header">
-          <div>
-            <span className="eyebrow">House rules</span>
-            <h2 id="rules-title">How to play High Trump</h2>
-          </div>
-          <button
-            type="button"
-            className="close-button"
-            onClick={onClose}
-            aria-label="Close rules"
-          >
-            ×
-          </button>
-        </header>
-
-        <div className="rules-grid">
-          <article>
-            <span className="rule-number">01</span>
-            <h3>High bid opens</h3>
-            <p>
-              After the deal and trump reveal, players bid clockwise. Earlier
-              bids stay visible. The highest bidder leads the first trick;
-              Board is highest, and the first bid wins a tie.
-            </p>
-          </article>
-          <article>
-            <span className="rule-number">02</span>
-            <h3>Follow the lead</h3>
-            <p>
-              The first card sets the lead color for that trick. You must play
-              that color when you have it. If you do not, any card is legal.
-              Whoever wins the trick leads the next one.
-            </p>
-          </article>
-          <article>
-            <span className="rule-number">03</span>
-            <h3>Break trump first</h3>
-            <p>
-              Trump cannot lead a trick until someone who is void in the lead
-              color plays trump. If trump is the only color left in your hand,
-              you may lead it, and that forced lead breaks trump.
-            </p>
-          </article>
-          <article>
-            <span className="rule-number">04</span>
-            <h3>Trump cuts through</h3>
-            <p>
-              Every trump-color card beats every ordinary non-trump. Otherwise,
-              the highest card in the lead color wins. High rank wins within a
-              color.
-            </p>
-          </article>
-          <article className="yellow-rule">
-            <span className="rule-number">★</span>
-            <h3>Yellow 2 is supreme</h3>
-            <p>
-              Yellow 2 beats every other card—even the highest trump. It is
-              still a Yellow card and must obey the follow-color rule.
-            </p>
-          </article>
-        </div>
-
-        <div className="scoring-rules">
-          <h3>Scoring</h3>
-          <div>
-            <span>
-              <strong>Made your bid</strong>
-              3 points per bid trick
-            </span>
-            <span>
-              <strong>Overtricks</strong>
-              +1 for each extra
-            </span>
-            <span>
-              <strong>Under bid</strong>
-              −1 for each trick short
-            </span>
-            <span>
-              <strong>Board</strong>
-              +20 made · −20 missed
-            </span>
-          </div>
-        </div>
-
-        <button type="button" className="primary-button" onClick={onClose}>
-          Back to the table
-        </button>
-      </section>
-    </ModalLayer>
-  );
-}
-
-export default function Home() {
-  const [settings, setSettings] = useState<GameSettings>(DEFAULT_SETTINGS);
-  const [phase, setPhase] = useState<Phase>("setup");
-  const [players, setPlayers] = useState<Player[]>([]);
-  const [schedule, setSchedule] = useState<number[]>([]);
-  const [roundIndex, setRoundIndex] = useState(0);
-  const [handSize, setHandSize] = useState(1);
-  const [dealerIndex, setDealerIndex] = useState(0);
-  const [firstBidderIndex, setFirstBidderIndex] = useState(0);
-  const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
-  const [trumpCard, setTrumpCard] = useState<Card | null>(null);
-  const [trumpBroken, setTrumpBroken] = useState(false);
-  const [trick, setTrick] = useState<PlayedCard[]>([]);
-  const [bidLog, setBidLog] = useState<BidLogEntry[]>([]);
-  const [lastWinner, setLastWinner] = useState<PlayedCard | null>(null);
-  const [roundResults, setRoundResults] = useState<RoundResult[]>([]);
-  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-  const [rulesOpen, setRulesOpen] = useState(false);
-  const [boardConfirmOpen, setBoardConfirmOpen] = useState(false);
-  const playCardButtonRef = useRef<HTMLButtonElement>(null);
-  const [announcement, setAnnouncement] = useState(
-    "Choose your table settings to begin.",
+        acceptRoom(payload.room);
+        setMessage("");
+        setConnection("connected");
+        return true;
+      } catch (error) {
+        if (sessionGeneration !== sessionGenerationRef.current) {
+          return false;
+        }
+        const apiError =
+          error instanceof ApiError
+            ? error
+            : new ApiError("The table could not be reached.", 500, "OFFLINE");
+        if (apiError.status === 401 || apiError.status === 404) {
+          localStorage.removeItem(sessionKey(code));
+          setPlayerToken("");
+          setRoom(null);
+          setMessage(apiError.message);
+        } else if (!quiet) {
+          setMessage(apiError.message);
+        }
+        setConnection("offline");
+        return false;
+      }
+    },
+    [acceptRoom],
   );
 
-  const maxAllowed = Math.min(18, getMaxHandSize(settings.playerCount));
-  const setupSchedule = useMemo(
-    () => buildRoundSchedule(Math.min(settings.maxHand, maxAllowed)),
-    [settings.maxHand, maxAllowed],
-  );
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const params = new URLSearchParams(window.location.search);
+      const requestedCode = (params.get("room") ?? "")
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, "")
+        .slice(0, 6);
+      if (!requestedCode) return;
 
-  const beginRound = useCallback(
-    (basePlayers: Player[], nextRoundIndex: number, gameSchedule: number[]) => {
-      const nextHandSize = gameSchedule[nextRoundIndex];
-      const deal = dealRound(basePlayers.length, nextHandSize);
-      const nextDealer = nextRoundIndex % basePlayers.length;
-      const firstToAct = (nextDealer + 1) % basePlayers.length;
-      const dealtPlayers = basePlayers.map((player, index) => ({
-        ...player,
-        bid: null,
-        tricks: 0,
-        hand: sortHand(deal.hands[index]),
-        lastDelta: nextRoundIndex === 0 ? null : player.lastDelta,
-      }));
+      setRoomCode(requestedCode);
+      const savedToken = localStorage.getItem(sessionKey(requestedCode));
+      if (savedToken) {
+        tokenRef.current = savedToken;
+        setPlayerToken(savedToken);
+        void loadRoom(requestedCode, savedToken);
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [loadRoom]);
 
-      setPlayers(dealtPlayers);
-      setRoundIndex(nextRoundIndex);
-      setHandSize(nextHandSize);
-      setDealerIndex(nextDealer);
-      setFirstBidderIndex(firstToAct);
-      setCurrentPlayerIndex(firstToAct);
-      setTrumpCard(deal.trumpCard);
-      setTrumpBroken(false);
-      setTrick([]);
-      setBidLog([]);
-      setLastWinner(null);
-      setRoundResults([]);
-      setSelectedCardId(null);
-      setBoardConfirmOpen(false);
-      setPhase("bidding");
-      setAnnouncement(
-        `${COLOR_META[deal.trumpColor].label} is trump. ${
-          dealtPlayers[firstToAct].name
-        } bids first.`,
+  const activeRoomCode = room?.code;
+  useEffect(() => {
+    if (!activeRoomCode || !playerToken) return;
+    let stopped = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      if (stopped) return;
+      if (!pollInFlight.current) {
+        pollInFlight.current = true;
+        await loadRoom(activeRoomCode, playerToken, true);
+        pollInFlight.current = false;
+      }
+      if (!stopped) {
+        timer = window.setTimeout(
+          poll,
+          document.visibilityState === "visible" ? 900 : 2_500,
+        );
+      }
+    };
+
+    timer = window.setTimeout(poll, 900);
+    const refresh = () => {
+      if (document.visibilityState === "visible") {
+        void loadRoom(activeRoomCode, playerToken, true);
+      }
+    };
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("online", refresh);
+    return () => {
+      stopped = true;
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("online", refresh);
+    };
+  }, [activeRoomCode, loadRoom, playerToken]);
+
+  const seatAtTable = useCallback(
+    (nextRoom: OnlineRoomView, token: string) => {
+      sessionGenerationRef.current += 1;
+      localStorage.setItem(sessionKey(nextRoom.code), token);
+      tokenRef.current = token;
+      roomRef.current = nextRoom;
+      setPlayerToken(token);
+      setRoom(nextRoom);
+      setRoomCode(nextRoom.code);
+      setConnection("connected");
+      setMessage("");
+      window.history.replaceState(
+        null,
+        "",
+        `/?room=${nextRoom.code}`,
       );
     },
     [],
   );
 
-  const startGame = () => {
-    const safeMax = Math.max(1, Math.min(settings.maxHand, maxAllowed));
-    const nextSchedule = buildRoundSchedule(safeMax);
-    const humanName = settings.playerName.trim() || "You";
-    const nextPlayers: Player[] = Array.from(
-      { length: settings.playerCount },
-      (_, index) => ({
-        id: index,
-        name: index === 0 ? humanName : AI_NAMES[index - 1],
-        isHuman: index === 0,
-        score: 0,
-        bid: null,
-        tricks: 0,
-        hand: [],
-        lastDelta: null,
-      }),
-    );
-
-    setSettings((current) => ({ ...current, maxHand: safeMax }));
-    setSchedule(nextSchedule);
-    beginRound(nextPlayers, 0, nextSchedule);
-  };
-
-  const commitBid = useCallback(
-    (playerIndex: number, bid: Bid) => {
-      if (
-        phase !== "bidding" ||
-        playerIndex !== currentPlayerIndex ||
-        bidLog.some((entry) => entry.playerIndex === playerIndex)
-      ) {
-        return;
-      }
-
-      const nextPlayers = players.map((player, index) =>
-        index === playerIndex ? { ...player, bid } : player,
-      );
-      const nextBidLog = [...bidLog, { playerIndex, bid }];
-      setPlayers(nextPlayers);
-      setBidLog(nextBidLog);
-      setBoardConfirmOpen(false);
-
-      if (nextBidLog.length === nextPlayers.length) {
-        const openingLeader = getOpeningLeaderIndex(nextBidLog);
-        const openingBid = nextBidLog.find(
-          (entry) => entry.playerIndex === openingLeader,
-        )?.bid;
-        const openingSubject = nextPlayers[openingLeader].isHuman
-          ? "You have"
-          : `${nextPlayers[openingLeader].name} has`;
-        const openingLeadVerb = nextPlayers[openingLeader].isHuman
-          ? "lead"
-          : "leads";
-        setPhase("playing");
-        setCurrentPlayerIndex(openingLeader);
-        setAnnouncement(
-          `Bidding is complete. ${openingSubject} the high bid, ${displayBid(
-            openingBid ?? 0,
-          )}, and ${openingLeadVerb} the first trick. Trump is unbroken.`,
-        );
-        return;
-      }
-
-      const nextBidder = (playerIndex + 1) % nextPlayers.length;
-      const nextBidderSubject = nextPlayers[nextBidder].isHuman
-        ? "You are"
-        : `${nextPlayers[nextBidder].name} is`;
-      const currentHighBidder = getOpeningLeaderIndex(nextBidLog);
-      const currentHighBid = nextBidLog.find(
-        (entry) => entry.playerIndex === currentHighBidder,
-      )?.bid;
-      const highBidSubject = nextPlayers[currentHighBidder].isHuman
-        ? "You currently hold"
-        : `${nextPlayers[currentHighBidder].name} currently holds`;
-      setCurrentPlayerIndex(nextBidder);
-      setAnnouncement(
-        `${nextPlayers[playerIndex].name} bid ${displayBid(
-          bid,
-        )}. ${highBidSubject} the high bid at ${displayBid(
-          currentHighBid ?? 0,
-        )}. ${nextBidderSubject} next.`,
-      );
-    },
-    [
-      bidLog,
-      currentPlayerIndex,
-      phase,
-      players,
-    ],
-  );
-
-  useEffect(() => {
-    if (
-      phase !== "bidding" ||
-      players.length === 0 ||
-      players[currentPlayerIndex]?.isHuman ||
-      !trumpCard
-    ) {
+  const createTable = async () => {
+    if (!name.trim()) {
+      setMessage("Enter your name first.");
       return;
     }
-
-    const timer = window.setTimeout(() => {
-      const player = players[currentPlayerIndex];
-      const bid = chooseAiBid(
-        player.hand,
-        trumpCard.color,
-        handSize,
-        bidLog.map((entry) => entry.bid),
+    setBusy(true);
+    setMessage("");
+    const token = createPlayerToken();
+    try {
+      const payload = await requestJson<{ room: OnlineRoomView }>(
+        "/api/rooms",
+        token,
+        {
+          method: "POST",
+          body: JSON.stringify({ name, playerCount, maxHand }),
+        },
       );
-      commitBid(currentPlayerIndex, bid);
-    }, 620);
+      seatAtTable(payload.room, token);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Could not create the table.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
 
-    return () => window.clearTimeout(timer);
-  }, [
-    bidLog,
-    commitBid,
-    currentPlayerIndex,
-    handSize,
-    phase,
-    players,
-    trumpCard,
-  ]);
+  const joinTable = async () => {
+    const code = roomCode
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 6);
+    if (!name.trim()) {
+      setMessage("Enter your name first.");
+      return;
+    }
+    if (code.length !== 6) {
+      setMessage("Enter the six-character table code.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    const savedToken = localStorage.getItem(sessionKey(code));
+    const token = savedToken ?? createPlayerToken();
+    try {
+      const payload = await requestJson<{ room: OnlineRoomView }>(
+        `/api/rooms/${encodeURIComponent(code)}/join`,
+        token,
+        {
+          method: "POST",
+          body: JSON.stringify({ name }),
+        },
+      );
+      seatAtTable(payload.room, token);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Could not join the table.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
 
-  const playCard = useCallback(
-    (playerIndex: number, card: Card) => {
-      if (
-        phase !== "playing" ||
-        playerIndex !== currentPlayerIndex ||
-        !trumpCard
-      ) {
-        return;
-      }
+  const sendAction = useCallback(
+    async (action: OnlineRoomAction) => {
+      const currentRoom = roomRef.current;
+      const token = tokenRef.current;
+      if (!currentRoom || !token || busy) return;
+      const sessionGeneration = sessionGenerationRef.current;
 
-      const player = players[playerIndex];
-      const leadBeforePlay = getLeadColor(trick);
-      const legalCards = getLegalCards(player.hand, {
-        leadColor: leadBeforePlay,
-        trumpColor: trumpCard.color,
-        trumpBroken,
-      });
-      if (!legalCards.some((legalCard) => legalCard.id === card.id)) {
-        if (leadBeforePlay === undefined && card.color === trumpCard.color) {
-          setAnnouncement(
-            `${COLOR_META[trumpCard.color].label} trump has not been broken. Lead a non-trump card unless trump is the only color you hold.`,
-          );
-        } else if (leadBeforePlay !== undefined) {
-          setAnnouncement(
-            `You must follow ${COLOR_META[leadBeforePlay].label}.`,
-          );
+      setBusy(true);
+      setMessage("");
+      try {
+        const payload = await requestJson<{ room: OnlineRoomView }>(
+          `/api/rooms/${encodeURIComponent(currentRoom.code)}/actions`,
+          token,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              actionId: createActionId(),
+              expectedRevision: currentRoom.revision,
+              action,
+            }),
+          },
+        );
+        if (sessionGeneration !== sessionGenerationRef.current) return;
+        acceptRoom(payload.room);
+        setConnection("connected");
+      } catch (error) {
+        if (sessionGeneration !== sessionGenerationRef.current) return;
+        if (error instanceof ApiError && error.room) {
+          acceptRoom(error.room);
         }
-        return;
-      }
-
-      const breaksTrump =
-        !trumpBroken &&
-        doesPlayBreakTrump(
-          card,
-          player.hand,
-          trick,
-          trumpCard.color,
+        setMessage(
+          error instanceof Error ? error.message : "That move was not accepted.",
         );
-      const nextPlayers = players.map((entry, index) =>
-        index === playerIndex
-          ? {
-              ...entry,
-              hand: entry.hand.filter((held) => held.id !== card.id),
-            }
-          : entry,
-      );
-      const nextTrick = [...trick, { playerIndex, card }];
-      setSelectedCardId(null);
-      setTrick(nextTrick);
-      if (breaksTrump) {
-        setTrumpBroken(true);
+      } finally {
+        if (sessionGeneration === sessionGenerationRef.current) {
+          setBusy(false);
+        }
       }
-
-      if (nextTrick.length < nextPlayers.length) {
-        const nextPlayerIndex = (playerIndex + 1) % nextPlayers.length;
-        setPlayers(nextPlayers);
-        setCurrentPlayerIndex(nextPlayerIndex);
-        setAnnouncement(
-          breaksTrump
-            ? `${nextPlayers[playerIndex].name} breaks ${
-                COLOR_META[trumpCard.color].label
-              } trump. ${nextPlayers[nextPlayerIndex].name} is next.`
-            : `${nextPlayers[nextPlayerIndex].name} to play.`,
-        );
-        return;
-      }
-
-      const winner = getTrickWinner(nextTrick, trumpCard.color);
-      const awardedPlayers = nextPlayers.map((entry, index) =>
-        index === winner.playerIndex
-          ? { ...entry, tricks: entry.tricks + 1 }
-          : entry,
-      );
-      setPlayers(awardedPlayers);
-      setLastWinner(winner);
-      setCurrentPlayerIndex(winner.playerIndex);
-      setPhase("trick-result");
-      setAnnouncement(
-        `${awardedPlayers[winner.playerIndex].name} wins the trick. ${describeTrickWin(
-          winner,
-          nextTrick,
-          trumpCard.color,
-        )}.${breaksTrump ? ` ${COLOR_META[trumpCard.color].label} trump is now broken.` : ""}`,
-      );
     },
-    [
-      currentPlayerIndex,
-      phase,
-      players,
-      trick,
-      trumpBroken,
-      trumpCard,
-    ],
+    [acceptRoom, busy],
   );
 
-  useEffect(() => {
-    if (
-      phase !== "playing" ||
-      players.length === 0 ||
-      players[currentPlayerIndex]?.isHuman ||
-      !trumpCard
-    ) {
-      return;
+  const copyInvitation = async () => {
+    if (!room) return;
+    const invitation = `${window.location.origin}/?room=${room.code}`;
+    try {
+      await navigator.clipboard.writeText(invitation);
+    } catch {
+      const textArea = document.createElement("textarea");
+      textArea.value = invitation;
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      textArea.remove();
     }
-
-    const timer = window.setTimeout(() => {
-      const player = players[currentPlayerIndex];
-      const card = chooseAiCard(
-        player.hand,
-        trick,
-        trumpCard.color,
-        player.bid ?? 0,
-        player.tricks,
-        { trumpBroken },
-      );
-      playCard(currentPlayerIndex, card);
-    }, 720);
-
-    return () => window.clearTimeout(timer);
-  }, [
-    currentPlayerIndex,
-    phase,
-    playCard,
-    players,
-    trick,
-    trumpBroken,
-    trumpCard,
-  ]);
-
-  const finishTrick = () => {
-    if (!lastWinner) return;
-
-    const roundIsComplete = players.every((player) => player.hand.length === 0);
-    if (!roundIsComplete) {
-      setTrick([]);
-      setLastWinner(null);
-      setPhase("playing");
-      setCurrentPlayerIndex(lastWinner.playerIndex);
-      setAnnouncement(
-        `${players[lastWinner.playerIndex].name} leads the next trick. Trump is ${
-          trumpBroken ? "broken" : "still unbroken"
-        }.`,
-      );
-      return;
-    }
-
-    const results = players.map((player, playerIndex) => {
-      const bid = player.bid ?? 0;
-      const delta = scoreBid(bid, player.tricks, handSize);
-      return {
-        playerIndex,
-        name: player.name,
-        bid,
-        tricks: player.tricks,
-        delta,
-        previousTotal: player.score,
-        total: player.score + delta,
-      };
-    });
-    const scoredPlayers = players.map((player, playerIndex) => ({
-      ...player,
-      score: results[playerIndex].total,
-      lastDelta: results[playerIndex].delta,
-    }));
-
-    setPlayers(scoredPlayers);
-    setRoundResults(results);
-    setPhase("round-result");
-    setAnnouncement(`Round ${roundIndex + 1} is complete. Scores are ready.`);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1_800);
   };
 
-  const advanceRound = () => {
-    if (roundIndex >= schedule.length - 1) {
-      setPhase("game-over");
-      const highScore = Math.max(...players.map((player) => player.score));
-      const winners = players
-        .filter((player) => player.score === highScore)
-        .map((player) => player.name);
-      setAnnouncement(
-        winners.length === 1
-          ? `${winners[0]} wins with ${highScore} points.`
-          : `${winners.join(" and ")} tie with ${highScore} points.`,
-      );
-      return;
-    }
-
-    beginRound(players, roundIndex + 1, schedule);
+  const leaveTable = () => {
+    sessionGenerationRef.current += 1;
+    roomRef.current = null;
+    tokenRef.current = "";
+    setRoom(null);
+    setPlayerToken("");
+    setBusy(false);
+    setMessage("");
+    window.history.replaceState(null, "", "/");
   };
 
-  const resetToSetup = () => {
-    setPhase("setup");
-    setPlayers([]);
-    setSchedule([]);
-    setTrick([]);
-    setBidLog([]);
-    setLastWinner(null);
-    setRoundResults([]);
-    setTrumpCard(null);
-    setTrumpBroken(false);
-    setAnnouncement("Choose your table settings to begin.");
-  };
-
-  const human = players.find((player) => player.isHuman);
-  const currentPlayer = players[currentPlayerIndex];
-  const leadColor = getLeadColor(trick);
-  const currentPlayerOnlyHasTrump =
-    Boolean(currentPlayer && trumpCard && currentPlayer.hand.length > 0) &&
-    currentPlayer.hand.every((card) => card.color === trumpCard?.color);
-  const leadInstruction = leadColor
-    ? `${COLOR_META[leadColor].label} was led`
-    : !trumpBroken && trumpCard
-      ? currentPlayerOnlyHasTrump
-        ? `Only ${COLOR_META[trumpCard.color].label} remains — trump may lead`
-        : `${COLOR_META[trumpCard.color].label} trump is locked — lead another color`
-      : "Lead any color";
-  const legalIds = useMemo(() => {
-    if (
-      !human ||
-      !trumpCard ||
-      phase !== "playing" ||
-      !currentPlayer?.isHuman
-    ) {
-      return new Set<string>();
-    }
-    return new Set(
-      getLegalCards(human.hand, {
-        leadColor,
-        trumpColor: trumpCard.color,
-        trumpBroken,
-      }).map((card) => card.id),
-    );
-  }, [
-    currentPlayer?.isHuman,
-    human,
-    leadColor,
-    phase,
-    trumpBroken,
-    trumpCard,
-  ]);
-  const openingLeaderIndex =
-    bidLog.length === players.length && bidLog.length > 0
-      ? getOpeningLeaderIndex(bidLog)
-      : null;
-  const currentHighBidderIndex =
-    bidLog.length > 0 ? getOpeningLeaderIndex(bidLog) : null;
-  const completedTricks = players.reduce(
-    (total, player) => total + player.tricks,
-    0,
-  );
-  const isOpeningLead =
-    phase === "playing" && completedTricks === 0 && trick.length === 0;
-  const selectedCard = human?.hand.find(
-    (card) => card.id === selectedCardId,
-  );
-  useEffect(() => {
-    if (selectedCardId && phase === "playing" && currentPlayer?.isHuman) {
-      playCardButtonRef.current?.focus();
-    }
-  }, [currentPlayer?.isHuman, phase, selectedCardId]);
-  const standings = useMemo(
-    () =>
-      [...players].sort(
-        (left, right) => right.score - left.score || left.id - right.id,
-      ),
-    [players],
-  );
-  const gameWinners =
-    standings.length > 0
-      ? standings.filter((player) => player.score === standings[0].score)
-      : [];
-
-  if (phase === "setup") {
+  if (!room) {
     return (
-      <main className="setup-screen">
-        <div className="setup-glow setup-glow-left" />
-        <div className="setup-glow setup-glow-right" />
-        <nav className="setup-nav" aria-label="Game navigation">
-          <a className="brand" href="#" aria-label="High Trump home">
-            <span className="brand-mark" aria-hidden="true">
+      <main className={styles.entryPage}>
+        <div className={styles.ambientOne} />
+        <div className={styles.ambientTwo} />
+        <header className={styles.entryHeader}>
+          <Link href="/" className={styles.brand}>
+            <span className={styles.brandMark}>
               <i />
               <b>2</b>
             </span>
             <span>
               <strong>High Trump</strong>
-              <small>A Rook-style card game</small>
+              <small>Live multiplayer</small>
             </span>
-          </a>
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => setRulesOpen(true)}
-          >
-            How to play
-          </button>
-        </nav>
+          </Link>
+          <Link href="/solo" className={styles.backLink}>
+            Play solo
+          </Link>
+        </header>
 
-        <div className="setup-content">
-          <section className="setup-hero">
-            <span className="eyebrow">
-              Read the table. Call your hand. Take the trick.
-            </span>
+        <section className={styles.entryHero}>
+          <div className={styles.heroCopy}>
+            <span className={styles.eyebrow}>One table. Every hand live.</span>
             <h1>
-              Every bid is a promise.
-              <em>Every card can break it.</em>
+              Deal your friends in.
+              <em>Keep your cards close.</em>
             </h1>
             <p>
-              A strategic trick-taking game played with a 56-card Rook deck.
-              Follow the lead, use trump wisely, and never lose sight of the
-              unbeatable Yellow 2.
+              Create a private table, send the six-character code, and play
+              every bid and trick together from your own devices.
             </p>
-
-            <div className="hero-rule-row">
-              <span>
-                <i>◆</i>
-                Bid in order
-              </span>
-              <span>
-                <i>▲</i>
-                Follow color
-              </span>
-              <span>
-                <i>✦</i>
-                Call Board
-              </span>
+            <div className={styles.trustRow}>
+              <span>Private hands</span>
+              <span>Live turns</span>
+              <span>Reconnect anytime</span>
             </div>
+          </div>
 
-            <div className="hero-cards" aria-label="Example game cards">
-              <CardFace
-                card={{ id: "red-14", color: "red", rank: 14 }}
-                compact
-              />
-              <CardFace
-                card={{ id: "green-11", color: "green", rank: 11 }}
-                compact
-              />
-              <CardFace
-                card={{ id: "yellow-2", color: "yellow", rank: 2 }}
-                compact
-              />
-              <span className="hero-trump-tag">Absolute high</span>
-            </div>
-          </section>
+          <div className={styles.entryPanels}>
+            <section className={styles.entryPanel}>
+              <span className={styles.panelNumber}>01</span>
+              <h2>Create a table</h2>
+              <p>You host the game and choose when to deal.</p>
 
-          <section className="setup-panel" aria-labelledby="table-title">
-            <div className="panel-heading">
-              <div>
-                <span className="eyebrow">New table</span>
-                <h2 id="table-title">Set the stakes</h2>
-              </div>
-              <span className="deck-badge">56 cards</span>
-            </div>
+              <label className={styles.field}>
+                <span>Your name</span>
+                <input
+                  value={name}
+                  maxLength={18}
+                  autoComplete="nickname"
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Enter your name"
+                />
+              </label>
 
-            <label className="field-group">
-              <span>Your name</span>
-              <input
-                type="text"
-                value={settings.playerName}
-                maxLength={14}
-                onChange={(event) =>
-                  setSettings((current) => ({
-                    ...current,
-                    playerName: event.target.value,
-                  }))
-                }
-                placeholder="You"
-              />
-            </label>
+              <fieldset className={styles.field}>
+                <legend>Seats</legend>
+                <div className={styles.segmented}>
+                  {[2, 3, 4, 5, 6].map((count) => (
+                    <button
+                      type="button"
+                      key={count}
+                      className={playerCount === count ? styles.active : ""}
+                      onClick={() => {
+                        setPlayerCount(count);
+                        setMaxHand((current) =>
+                          Math.min(
+                            current,
+                            Math.min(18, getMaxHandSize(count)),
+                          ),
+                        );
+                      }}
+                    >
+                      {count}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
 
-            <fieldset className="field-group">
-              <legend>Players</legend>
-              <div className="segmented-control">
-                {[3, 4, 5, 6].map((count) => (
-                  <button
-                    type="button"
-                    key={count}
-                    className={
-                      settings.playerCount === count ? "is-active" : ""
-                    }
-                    onClick={() =>
-                      setSettings((current) => ({
-                        ...current,
-                        playerCount: count,
-                        maxHand: Math.min(
-                          current.maxHand,
-                          Math.min(18, getMaxHandSize(count)),
-                        ),
-                      }))
-                    }
-                    aria-pressed={settings.playerCount === count}
-                  >
-                    {count}
-                  </button>
-                ))}
-              </div>
-              <small>You + {settings.playerCount - 1} computer players</small>
-            </fieldset>
+              <label className={styles.rangeField}>
+                <span>
+                  Maximum hand <b>{maxHand} cards</b>
+                </span>
+                <input
+                  type="range"
+                  min="1"
+                  max={maxAllowed}
+                  value={maxHand}
+                  onChange={(event) => setMaxHand(Number(event.target.value))}
+                />
+                <small>
+                  {maxHand * 2 - 1} rounds · 1 → {maxHand} → 1
+                </small>
+              </label>
 
-            <fieldset className="field-group max-hand-field">
-              <legend>
-                Maximum hand
-                <strong>{settings.maxHand} cards</strong>
-              </legend>
-              <input
-                type="range"
-                min="1"
-                max={maxAllowed}
-                value={Math.min(settings.maxHand, maxAllowed)}
-                onChange={(event) =>
-                  setSettings((current) => ({
-                    ...current,
-                    maxHand: Number(event.target.value),
-                  }))
-                }
-                aria-label="Maximum cards per player"
-              />
-              <div className="range-labels">
-                <span>1</span>
-                <span>{maxAllowed}</span>
-              </div>
-            </fieldset>
-
-            <div className="round-preview">
-              <div className="round-preview-header">
-                <span>Round path</span>
-                <strong>
-                  {setupSchedule.length} round
-                  {setupSchedule.length === 1 ? "" : "s"}
-                </strong>
-              </div>
-              <div className="round-dots" aria-label="Round hand sizes">
-                {setupSchedule.map((size, index) => (
-                  <span
-                    key={`${size}-${index}`}
-                    className={size === settings.maxHand ? "is-peak" : ""}
-                    title={`Round ${index + 1}: ${size} card${
-                      size === 1 ? "" : "s"
-                    }`}
-                  >
-                    {size}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            <div className="setup-action-stack">
               <button
                 type="button"
-                className="primary-button deal-button"
-                onClick={startGame}
+                className={styles.primaryButton}
+                disabled={busy}
+                onClick={createTable}
               >
-                <span>Play solo</span>
-                <b aria-hidden="true">→</b>
+                {busy ? "Opening table…" : "Create share code"}
+                <span>→</span>
               </button>
-              <a
-                className="secondary-button online-deal-button"
-                href="/online"
-              >
-                <span>Play online with a share code</span>
-                <b aria-hidden="true">↗</b>
-              </a>
-            </div>
-            <p className="setup-footnote">
-              Solo includes computer players. Online gives every player a
-              private hand.
-            </p>
-          </section>
-        </div>
+            </section>
 
-        <footer className="setup-footer">
-          <span>Four colors · Ranks 1–14 · No Rook card</span>
-          <span className="suit-key" aria-label="Card colors">
-            {(Object.keys(COLOR_META) as Color[]).map((color) => (
-              <SuitChip color={color} label={false} key={color} />
-            ))}
-          </span>
-        </footer>
-        {rulesOpen && <RulesDialog onClose={() => setRulesOpen(false)} />}
+            <section className={joinClasses(styles.entryPanel, styles.joinPanel)}>
+              <span className={styles.panelNumber}>02</span>
+              <h2>Join a table</h2>
+              <p>Enter the code the host sent you.</p>
+
+              <label className={styles.field}>
+                <span>Your name</span>
+                <input
+                  value={name}
+                  maxLength={18}
+                  autoComplete="nickname"
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Enter your name"
+                />
+              </label>
+
+              <label className={styles.field}>
+                <span>Table code</span>
+                <input
+                  className={styles.codeInput}
+                  value={roomCode}
+                  maxLength={6}
+                  autoCapitalize="characters"
+                  autoComplete="off"
+                  onChange={(event) =>
+                    setRoomCode(
+                      event.target.value
+                        .toUpperCase()
+                        .replace(/[^A-Z0-9]/g, ""),
+                    )
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void joinTable();
+                  }}
+                  placeholder="ABC234"
+                />
+              </label>
+
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                disabled={busy}
+                onClick={joinTable}
+              >
+                {busy ? "Taking your seat…" : "Join table"}
+              </button>
+
+              <div className={styles.joinNote}>
+                <span>♛</span>
+                Your reconnect key stays on this device. It is never included
+                in the link you share.
+              </div>
+            </section>
+          </div>
+        </section>
+
+        {message && (
+          <div className={styles.errorToast} role="alert">
+            {message}
+          </div>
+        )}
       </main>
     );
   }
 
+  const me = room.players.find((player) => player.id === room.myPlayerId)!;
+  const currentPlayer = room.players[room.currentPlayerIndex];
+  const isMyTurn = currentPlayer?.id === room.myPlayerId;
+  const leadColor = getLeadColor(room.trick);
+  const legalIds = new Set(
+    room.phase === "playing" && isMyTurn && room.trumpCard
+      ? getLegalCards(room.myHand, {
+          leadColor,
+          trumpColor: room.trumpCard.color,
+          trumpBroken: room.trumpBroken,
+        }).map((card) => card.id)
+      : [],
+  );
+  const visibleTrick =
+    room.trick.length > 0 ? room.trick : room.lastTrick;
+  const showingLastTrick =
+    room.trick.length === 0 && room.lastTrick.length > 0;
+  const highScore =
+    room.phase === "game-over"
+      ? Math.max(...room.players.map((player) => player.score))
+      : null;
+  const winners =
+    highScore === null
+      ? []
+      : room.players.filter((player) => player.score === highScore);
+
   return (
-    <main className="game-shell">
-      <div className="sr-only" aria-live="polite">
-        {announcement}
+    <main className={styles.gamePage}>
+      <div className={styles.liveRegion} aria-live="polite">
+        {message ||
+          (currentPlayer
+            ? `${currentPlayer.name}'s turn`
+            : "Waiting at the table")}
       </div>
 
-      <header className="game-topbar">
-        <a
-          className="brand brand-compact"
-          href="#"
-          onClick={resetToSetup}
-          aria-label="Return to game setup"
+      <header className={styles.gameHeader}>
+        <Link
+          href="/"
+          className={styles.brand}
+          onClick={leaveTable}
+          aria-label="Leave table and return to multiplayer home"
         >
-          <span className="brand-mark" aria-hidden="true">
+          <span className={styles.brandMark}>
             <i />
             <b>2</b>
           </span>
           <span>
             <strong>High Trump</strong>
-            <small>Table {settings.playerCount}</small>
+            <small>Table {room.code}</small>
           </span>
-        </a>
+        </Link>
 
-        <div className="topbar-round">
-          <span className="mobile-game-context">
-            R{roundIndex + 1}/{schedule.length} ·{" "}
-            {trumpCard ? `${COLOR_META[trumpCard.color].label} trump` : ""} ·{" "}
-            {trumpBroken ? "Broken" : "Locked"}
-          </span>
-          <span>
-            Round <strong>{roundIndex + 1}</strong> of {schedule.length}
-          </span>
-          <i />
-          <span>
-            <strong>{handSize}</strong> card{handSize === 1 ? "" : "s"}
-          </span>
-          {trumpCard && (
-            <>
-              <i />
-              <SuitChip color={trumpCard.color} />
-              <span
-                className={`trump-state-chip ${
-                  trumpBroken ? "is-broken" : "is-unbroken"
-                }`}
-              >
-                {trumpBroken ? "Broken" : "Unbroken"}
-              </span>
-            </>
-          )}
-        </div>
+        <button
+          type="button"
+          className={styles.codePill}
+          onClick={copyInvitation}
+          title="Copy invitation link"
+        >
+          <small>Share code</small>
+          <strong>{room.code}</strong>
+          <span>{copied ? "Copied" : "Copy"}</span>
+        </button>
 
-        <div className="topbar-actions">
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => setRulesOpen(true)}
+        <div className={styles.headerActions}>
+          <span
+            className={joinClasses(
+              styles.connection,
+              connection === "offline" && styles.connectionOffline,
+            )}
           >
-            Rules
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={resetToSetup}
-            aria-label="Leave game and return to setup"
-            title="New game"
-          >
-            ↻
+            <i />
+            {connection === "connected"
+              ? "Live"
+              : connection === "syncing"
+                ? "Syncing"
+                : "Reconnecting"}
+          </span>
+          <button type="button" onClick={leaveTable}>
+            Exit table
           </button>
         </div>
       </header>
 
-      <div className="game-layout">
-        <section className="table-column" aria-label="Card table">
-          <div
-            className="opponents-rack"
-            role="region"
-            aria-label="Computer players. Scroll horizontally for all players."
-            tabIndex={0}
-          >
-            {players
-              .filter((player) => !player.isHuman)
-              .map((player) => {
-                const playerIndex = players.findIndex(
-                  (entry) => entry.id === player.id,
-                );
-                const isCurrent = playerIndex === currentPlayerIndex;
-                return (
-                  <article
-                    className={`opponent-seat ${
-                      isCurrent ? "is-current" : ""
-                    } ${
-                      phase === "bidding" &&
-                      currentHighBidderIndex === playerIndex
-                        ? "has-high-bid"
-                        : ""
-                    } ${
-                      isOpeningLead && openingLeaderIndex === playerIndex
-                        ? "is-opening-leader"
-                        : ""
-                    }`}
-                    key={player.id}
-                  >
-                    <div className="seat-avatar" aria-hidden="true">
-                      {player.name.slice(0, 1)}
-                      {playerIndex === dealerIndex && (
-                        <span className="dealer-pin">D</span>
-                      )}
-                    </div>
-                    <div className="seat-copy">
-                      <strong>
-                        {player.name}
-                        {isOpeningLead &&
-                          openingLeaderIndex === playerIndex && (
-                            <em>Opens</em>
-                          )}
-                      </strong>
-                      <span>
-                        {phase === "bidding" && player.bid === null
-                          ? isCurrent
-                            ? "Choosing a bid…"
-                            : "Waiting to bid"
-                          : `${displayBid(player.bid)} bid · ${
-                              player.tricks
-                            } won · ${player.score} pts`}
-                      </span>
-                    </div>
-                    <div className="opponent-hand" aria-label="Hidden cards">
-                      <CardBack small />
-                      <span>{player.hand.length}</span>
-                    </div>
-                    <b
-                      className="opponent-score"
-                      aria-hidden="true"
-                    >
-                      {player.score}
-                      <small>pts</small>
-                    </b>
-                  </article>
-                );
-              })}
+      {room.phase === "lobby" ? (
+        <section className={styles.lobby}>
+          <div className={styles.lobbyIntro}>
+            <span className={styles.eyebrow}>The table is open</span>
+            <h1>Invite the rest of the table.</h1>
+            <p>
+              Send the code or invitation link. Each player joins from their
+              own device and sees only their own hand.
+            </p>
+
+            <div className={styles.shareCard}>
+              <span>Table code</span>
+              <strong>{room.code}</strong>
+              <button type="button" onClick={copyInvitation}>
+                {copied ? "Invitation copied" : "Copy invitation link"}
+              </button>
+            </div>
           </div>
 
-          <div className="table-frame">
-            <div className="table-felt">
-              <div className="felt-grain" />
-              <div className="trump-plinth">
-                <span className="plinth-label">Trump card</span>
-                {trumpCard && <CardFace card={trumpCard} compact />}
-                {trumpCard && (
-                  <div className="trump-readout">
-                    <SuitChip color={trumpCard.color} />
-                    <span
-                      className={`trump-break-state ${
-                        trumpBroken ? "is-broken" : ""
-                      }`}
-                    >
-                      <i aria-hidden="true">{trumpBroken ? "↯" : "◇"}</i>
-                      {trumpBroken ? "Broken" : "Locked"}
-                    </span>
-                  </div>
-                )}
+          <div className={styles.lobbyTable}>
+            <header>
+              <div>
+                <span>Players seated</span>
+                <strong>
+                  {room.players.length} / {room.playerCount}
+                </strong>
               </div>
+              <small>
+                {room.maxHand * 2 - 1} rounds · up to {room.maxHand} cards
+              </small>
+            </header>
 
-              <div className="trick-stage">
-                {trick.length === 0 && phase !== "bidding" && (
-                  <div className="empty-trick">
-                    <span aria-hidden="true">◇</span>
+            <div className={styles.seatGrid}>
+              {Array.from({ length: room.playerCount }, (_, seat) => {
+                const player = room.players.find(
+                  (candidate) => candidate.seat === seat,
+                );
+                return player ? (
+                  <article
+                    className={joinClasses(
+                      styles.seat,
+                      player.id === room.myPlayerId && styles.mySeat,
+                    )}
+                    key={player.id}
+                  >
+                    <span>{player.name.slice(0, 1).toUpperCase()}</span>
+                    <div>
+                      <strong>
+                        {player.name}
+                        {player.id === room.myPlayerId ? " · You" : ""}
+                      </strong>
+                      <small>
+                        {player.id ===
+                        room.players.find((entry) => entry.seat === 0)?.id
+                          ? "Host"
+                          : `Seat ${seat + 1}`}
+                      </small>
+                    </div>
+                    <b>Ready</b>
+                  </article>
+                ) : (
+                  <EmptySeat number={seat + 1} key={seat} />
+                );
+              })}
+            </div>
+
+            {room.isHost ? (
+              <button
+                type="button"
+                className={styles.primaryButton}
+                disabled={busy || room.players.length !== room.playerCount}
+                onClick={() => void sendAction({ type: "start" })}
+              >
+                {room.players.length === room.playerCount
+                  ? "Deal the first round"
+                  : `Waiting for ${
+                      room.playerCount - room.players.length
+                    } more`}
+                <span>→</span>
+              </button>
+            ) : (
+              <div className={styles.waitingHost}>
+                <i />
+                Waiting for the host to deal
+              </div>
+            )}
+          </div>
+        </section>
+      ) : (
+        <div className={styles.gameGrid}>
+          <section className={styles.tableColumn}>
+            <div className={styles.roundBar}>
+              <span>
+                Round <b>{room.roundIndex + 1}</b> / {room.schedule.length}
+              </span>
+              <i />
+              <span>
+                <b>{room.handSize}</b> card
+                {room.handSize === 1 ? "" : "s"}
+              </span>
+              {room.trumpCard && (
+                <>
+                  <i />
+                  <SuitChip color={room.trumpCard.color} />
+                  <span
+                    className={joinClasses(
+                      styles.trumpState,
+                      room.trumpBroken && styles.trumpBroken,
+                    )}
+                  >
+                    {room.trumpBroken ? "Broken" : "Locked"}
+                  </span>
+                </>
+              )}
+            </div>
+
+            <div className={styles.opponents}>
+              {room.players
+                .filter((player) => player.id !== room.myPlayerId)
+                .map((player) => (
+                  <article
+                    key={player.id}
+                    className={joinClasses(
+                      styles.opponent,
+                      player.seat === room.currentPlayerIndex &&
+                        styles.opponentActive,
+                    )}
+                  >
+                    <span>{player.name.slice(0, 1).toUpperCase()}</span>
+                    <div>
+                      <strong>{player.name}</strong>
+                      <small>
+                        Bid {displayBid(player.bid)} · {player.tricks} won
+                      </small>
+                    </div>
+                    <b>
+                      {player.handCount}
+                      <small>cards</small>
+                    </b>
+                  </article>
+                ))}
+            </div>
+
+            <div className={styles.felt}>
+              <div className={styles.feltPattern} />
+              {room.trumpCard && (
+                <aside className={styles.trumpCard}>
+                  <span>Trump</span>
+                  <CardFace card={room.trumpCard} compact />
+                </aside>
+              )}
+
+              <section className={styles.trickArea}>
+                {visibleTrick.length > 0 ? (
+                  <>
+                    <span className={styles.trickLabel}>
+                      {showingLastTrick
+                        ? `${room.players[room.lastWinner?.playerIndex ?? 0]?.name} won`
+                        : leadColor
+                          ? `${COLOR_META[leadColor].label} led`
+                          : "Current trick"}
+                    </span>
+                    <div className={styles.playedCards}>
+                      {visibleTrick.map((play) => (
+                        <div key={`${play.playerIndex}-${play.card.id}`}>
+                          <small>{room.players[play.playerIndex]?.name}</small>
+                          <CardFace card={play.card} compact />
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className={styles.emptyTrick}>
+                    <span>◇</span>
                     <strong>
-                      {currentPlayer?.isHuman
-                        ? "Your lead"
-                        : `${currentPlayer?.name} leads`}
+                      {isMyTurn ? "Your lead" : `${currentPlayer?.name} leads`}
                     </strong>
                     <small>
-                      {isOpeningLead
-                        ? `${displayBid(
-                            currentPlayer?.bid ?? null,
-                          )} is the high bid · ${leadInstruction}`
-                        : leadInstruction}
+                      {!room.trumpBroken && room.trumpCard
+                        ? `${COLOR_META[room.trumpCard.color].label} trump is locked`
+                        : "Trump is broken — any legal color may lead"}
                     </small>
                   </div>
                 )}
+              </section>
 
-                {trick.length > 0 && (
-                  <div
-                    className="trick-grid"
-                    aria-label={`Current trick, ${trick.length} cards played`}
-                  >
-                    {trick.map((play, index) => (
-                      <div
-                        className={`played-card ${
-                          lastWinner?.playerIndex === play.playerIndex
-                            ? "is-winner"
-                            : ""
-                        }`}
-                        key={`${play.playerIndex}-${play.card.id}`}
-                      >
-                        <span>{players[play.playerIndex].name}</span>
-                        <CardFace card={play.card} compact delay={index * 70} />
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {phase === "bidding" && (
-                <section className="bid-console" aria-labelledby="bid-title">
-                  <div className="bid-console-heading">
-                    <span className="phase-chip">Bidding</span>
-                    <h2 id="bid-title">
-                      {currentPlayer?.isHuman
-                        ? "How many tricks will you take?"
-                        : `${currentPlayer?.name} is studying the hand`}
-                    </h2>
-                    <p>
-                      {currentPlayer?.isHuman
-                        ? `Choose 0–${handSize}, or risk it all with Board.`
-                        : "Each player can see every bid made before theirs."}
-                    </p>
-                    <div className="bid-rule-strip">
-                      <span>High bid opens</span>
-                      <span>Board is highest</span>
-                      <span>First bid wins ties</span>
-                    </div>
-                  </div>
-
-                  {currentPlayer?.isHuman ? (
-                    <>
-                      <div
-                        className="bid-options"
-                        aria-label="Choose your bid"
-                      >
+              {room.phase === "bidding" && (
+                <section className={styles.bidConsole}>
+                  <span className={styles.phaseChip}>Bidding</span>
+                  <h2>
+                    {isMyTurn
+                      ? "How many tricks will you take?"
+                      : `${currentPlayer?.name} is choosing a bid`}
+                  </h2>
+                  <p>Every earlier bid stays visible. The high bid leads.</p>
+                  {isMyTurn ? (
+                    <div className={styles.bidControls}>
+                      <div>
                         {Array.from(
-                          { length: handSize + 1 },
+                          { length: room.handSize + 1 },
                           (_, bid) => (
                             <button
                               type="button"
                               key={bid}
-                              onClick={() => commitBid(currentPlayerIndex, bid)}
-                              aria-label={`Bid ${bid} trick${
-                                bid === 1 ? "" : "s"
-                              }`}
+                              disabled={busy}
+                              onClick={() =>
+                                void sendAction({ type: "bid", bid })
+                              }
                             >
                               {bid}
                             </button>
@@ -1348,537 +968,266 @@ export default function Home() {
                       </div>
                       <button
                         type="button"
-                        className="board-button"
-                        onClick={() => setBoardConfirmOpen(true)}
+                        className={styles.boardButton}
+                        disabled={busy}
+                        onClick={() =>
+                          void sendAction({ type: "bid", bid: "BOARD" })
+                        }
                       >
-                        <span aria-hidden="true">♛</span>
-                        <strong>Call Board</strong>
-                        <small>Take every trick · ±20</small>
+                        <b>♛</b>
+                        <span>
+                          Call Board
+                          <small>Every trick · ±20</small>
+                        </span>
                       </button>
-                    </>
+                    </div>
                   ) : (
-                    <div className="thinking-cards" aria-hidden="true">
-                      <CardBack />
-                      <CardBack />
-                      <CardBack />
+                    <div className={styles.waitingTurn}>
+                      <i />
+                      Your hand is ready. Waiting for your turn.
                     </div>
                   )}
 
-                  <div
-                    className={`bid-order player-count-${players.length}`}
-                  >
-                    {rotateOrder(players.length, firstBidderIndex).map(
-                      (playerIndex, orderIndex) => {
-                        const player = players[playerIndex];
-                        const entry = bidLog.find(
-                          (item) => item.playerIndex === playerIndex,
-                        );
-                        return (
-                          <span
-                            key={player.id}
-                            className={`${
-                              playerIndex === currentPlayerIndex
-                                ? "is-current"
-                                : entry
-                                  ? "is-complete"
-                                  : ""
-                            } ${
-                              entry &&
-                              currentHighBidderIndex === playerIndex
-                                ? "is-high-bid"
-                                : ""
-                            }`}
-                          >
-                            <i>{orderIndex + 1}</i>
-                            {player.name}
-                            <b>{entry ? displayBid(entry.bid) : "…"}</b>
-                            {entry &&
-                              currentHighBidderIndex === playerIndex && (
-                                <em>Leads</em>
-                              )}
-                          </span>
-                        );
-                      },
-                    )}
+                  <div className={styles.bidOrder}>
+                    {rotateOrder(
+                      room.players.length,
+                      room.firstBidderIndex,
+                    ).map((seat, orderIndex) => {
+                      const player = room.players[seat];
+                      const entry = room.bidLog.find(
+                        (bid) => bid.playerIndex === seat,
+                      );
+                      return (
+                        <span
+                          key={player.id}
+                          className={
+                            seat === room.currentPlayerIndex
+                              ? styles.currentBidder
+                              : ""
+                          }
+                        >
+                          <i>{orderIndex + 1}</i>
+                          {player.name}
+                          <b>{entry ? displayBid(entry.bid) : "…"}</b>
+                        </span>
+                      );
+                    })}
                   </div>
                 </section>
               )}
 
-              {phase === "trick-result" && lastWinner && trumpCard && (
-                <section className="trick-result-banner">
-                  <span className="winner-kicker">Trick won</span>
-                  <h2>{players[lastWinner.playerIndex].name}</h2>
-                  <p>{describeTrickWin(lastWinner, trick, trumpCard.color)}</p>
-                  <button
-                    type="button"
-                    className="primary-button"
-                    onClick={finishTrick}
-                  >
-                    {players.every((player) => player.hand.length === 0)
-                      ? "Score the round"
-                      : "Next trick"}
-                    <span aria-hidden="true">→</span>
-                  </button>
+              {room.phase === "playing" && (
+                <div
+                  className={joinClasses(
+                    styles.turnBanner,
+                    isMyTurn && styles.myTurnBanner,
+                  )}
+                >
+                  <i />
+                  <strong>
+                    {isMyTurn ? "Your turn" : `${currentPlayer?.name}'s turn`}
+                  </strong>
+                  <small>
+                    {leadColor
+                      ? `Follow ${COLOR_META[leadColor].label} if you can`
+                      : !room.trumpBroken && room.trumpCard
+                        ? `${COLOR_META[room.trumpCard.color].label} trump is locked`
+                        : "Lead any legal card"}
+                  </small>
+                </div>
+              )}
+
+              {room.phase === "round-result" && (
+                <section className={styles.resultPanel}>
+                  <span className={styles.phaseChip}>Round complete</span>
+                  <h2>Promises kept—and broken.</h2>
+                  <div className={styles.resultRows}>
+                    {room.roundResults.map((result) => (
+                      <div key={result.playerIndex}>
+                        <strong>{result.name}</strong>
+                        <span>
+                          Bid {displayBid(result.bid)} · {result.tricks} won
+                        </span>
+                        <b className={result.delta >= 0 ? styles.positive : ""}>
+                          {result.delta >= 0 ? "+" : ""}
+                          {result.delta}
+                        </b>
+                      </div>
+                    ))}
+                  </div>
+                  {room.isHost ? (
+                    <button
+                      type="button"
+                      className={styles.primaryButton}
+                      disabled={busy}
+                      onClick={() =>
+                        void sendAction({ type: "next-round" })
+                      }
+                    >
+                      {room.roundIndex >= room.schedule.length - 1
+                        ? "Show final standings"
+                        : "Deal the next round"}
+                      <span>→</span>
+                    </button>
+                  ) : (
+                    <div className={styles.waitingHost}>
+                      <i />
+                      Waiting for the host
+                    </div>
+                  )}
                 </section>
               )}
 
-              {phase === "playing" && currentPlayer && (
-                <div
-                  className={`turn-banner ${
-                    currentPlayer.isHuman ? "is-human-turn" : ""
-                  }`}
-                >
-                  <span className="turn-pulse" />
-                  <strong>
-                    {currentPlayer.isHuman
-                      ? "Your turn"
-                      : `${currentPlayer.name} is playing`}
-                  </strong>
-                  <small>
-                    {leadInstruction}
-                  </small>
-                </div>
+              {room.phase === "game-over" && (
+                <section className={styles.resultPanel}>
+                  <span className={styles.phaseChip}>Final standings</span>
+                  <h2>
+                    {winners.length === 1
+                      ? `${winners[0].name} wins the table.`
+                      : `${winners.map((winner) => winner.name).join(" & ")} tie.`}
+                  </h2>
+                  <p className={styles.finalScore}>
+                    {highScore} point{highScore === 1 ? "" : "s"}
+                  </p>
+                  {room.isHost ? (
+                    <button
+                      type="button"
+                      className={styles.primaryButton}
+                      disabled={busy}
+                      onClick={() => void sendAction({ type: "rematch" })}
+                    >
+                      Deal a rematch
+                      <span>↻</span>
+                    </button>
+                  ) : (
+                    <div className={styles.waitingHost}>
+                      <i />
+                      Waiting to see if the host calls a rematch
+                    </div>
+                  )}
+                </section>
               )}
             </div>
-          </div>
 
-          <section className="player-zone" aria-label="Your hand">
-            <header className="player-zone-header">
-              <div className="player-identity">
-                <span className="seat-avatar human-avatar">
-                  {human?.name.slice(0, 1)}
-                  {dealerIndex === 0 && <i className="dealer-pin">D</i>}
-                </span>
-                <span>
-                  <strong>
-                    {human?.name}
-                    {isOpeningLead && openingLeaderIndex === 0 && (
-                      <em className="opening-tag">Opens</em>
-                    )}
-                  </strong>
-                  <small>
-                    {human?.score ?? 0} pts · Bid{" "}
-                    {displayBid(human?.bid ?? null)} · {human?.tricks ?? 0}{" "}
-                    won
-                  </small>
-                </span>
-              </div>
-              {phase === "playing" && currentPlayer?.isHuman && (
-                <div className="follow-note">
-                  {leadColor &&
-                  !human?.hand.some((card) => card.color === leadColor)
-                    ? `Void in ${COLOR_META[leadColor].label} — any card is legal`
-                    : leadColor
-                      ? `Follow ${COLOR_META[leadColor].label}`
-                      : leadInstruction}
+            <section className={styles.myHand}>
+              <header>
+                <div>
+                  <span className={styles.avatar}>
+                    {me.name.slice(0, 1).toUpperCase()}
+                  </span>
+                  <span>
+                    <strong>{me.name} · You</strong>
+                    <small>
+                      {me.score} pts · Bid {displayBid(me.bid)} · {me.tricks} won
+                    </small>
+                  </span>
                 </div>
-              )}
-              {phase === "bidding" && (
-                <div className="hand-status-note">
-                  {currentPlayer?.isHuman
-                    ? "Your bid is up"
-                    : `Bidding · ${currentPlayer?.name} is deciding`}
-                </div>
-              )}
-              {phase === "playing" && !currentPlayer?.isHuman && (
-                <div className="hand-status-note">
-                  Waiting for {currentPlayer?.name}
-                </div>
-              )}
-              {selectedCard && phase === "playing" && (
-                <button
-                  ref={playCardButtonRef}
-                  type="button"
-                  className="play-card-button"
-                  onClick={() => playCard(0, selectedCard)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") {
-                      setSelectedCardId(null);
-                    }
-                  }}
-                >
-                  Play {COLOR_META[selectedCard.color].label}{" "}
-                  {selectedCard.rank}
-                  <span aria-hidden="true">↑</span>
-                </button>
-              )}
-            </header>
-
-            <div className="hand-scroll">
-              <div
-                className={`player-hand ${
-                  phase === "playing" && currentPlayer?.isHuman
-                    ? "is-active"
-                    : ""
-                }`}
-              >
-                {human?.hand.map((card, index) => {
-                  const isLegal =
-                    phase === "playing" &&
-                    currentPlayer?.isHuman &&
+                <p>
+                  {room.phase === "playing" && isMyTurn
+                    ? leadColor &&
+                      !room.myHand.some((card) => card.color === leadColor)
+                      ? `Void in ${COLOR_META[leadColor].label} — play any legal card`
+                      : leadColor
+                        ? `You must follow ${COLOR_META[leadColor].label}`
+                        : "Choose a card to lead"
+                    : room.phase === "bidding"
+                      ? isMyTurn
+                        ? "Your bid is up"
+                        : `Waiting for ${currentPlayer?.name}`
+                      : room.phase === "playing"
+                        ? `Waiting for ${currentPlayer?.name}`
+                        : "Round cards have been played"}
+                </p>
+              </header>
+              <div className={styles.handScroller}>
+                {room.myHand.map((card) => {
+                  const playable =
+                    room.phase === "playing" &&
+                    isMyTurn &&
                     legalIds.has(card.id);
-                  const unavailableReason =
-                    phase === "bidding"
-                      ? "Bidding is still in progress"
-                      : phase !== "playing"
-                        ? "Wait for the next trick"
-                        : !currentPlayer?.isHuman
-                          ? `Waiting for ${currentPlayer?.name}`
-                          : leadColor
-                            ? `You must follow ${
-                                COLOR_META[leadColor].label
-                              }`
-                            : trumpCard &&
-                                !trumpBroken &&
-                                card.color === trumpCard.color
-                              ? `${COLOR_META[trumpCard.color].label} trump is not broken`
-                              : "This card is not legal now";
                   return (
                     <CardFace
                       key={card.id}
                       card={card}
-                      selected={selectedCardId === card.id}
-                      disabled={!isLegal}
-                      unavailableReason={
-                        isLegal ? undefined : unavailableReason
-                      }
-                      delay={index * 35}
-                      onSelect={() =>
-                        setSelectedCardId((current) =>
-                          current === card.id ? null : card.id,
-                        )
+                      disabled={!playable}
+                      onPlay={
+                        playable
+                          ? () =>
+                              void sendAction({
+                                type: "play",
+                                cardId: card.id,
+                              })
+                          : undefined
                       }
                     />
                   );
                 })}
+                {room.myHand.length === 0 && (
+                  <div className={styles.emptyHand}>
+                    All cards played for this round
+                  </div>
+                )}
               </div>
-            </div>
+            </section>
           </section>
-        </section>
 
-        <aside className="score-panel" aria-labelledby="score-title">
-          <header>
-            <div>
-              <span className="eyebrow">Live table</span>
-              <h2 id="score-title">Scoreboard</h2>
-            </div>
-            <span className="round-badge">
-              {roundIndex + 1}/{schedule.length}
-            </span>
-          </header>
-
-          <div
-            className="score-list"
-            role="region"
-            aria-label="Player scores. Scroll horizontally on small screens."
-            tabIndex={0}
-          >
-            {players.map((player, index) => (
-              <article
-                className={`${index === currentPlayerIndex ? "is-current" : ""} ${
-                  player.isHuman ? "is-human" : ""
-                }`}
-                key={player.id}
-              >
-                <span className="score-rank">
-                  {standings.findIndex((entry) => entry.id === player.id) + 1}
-                </span>
-                <span className="score-name">
-                  <strong>{player.name}</strong>
-                  <small>
-                    {index === dealerIndex && "Dealer · "}
-                    {displayBid(player.bid)} bid · {player.tricks} won
-                  </small>
-                </span>
-                <span className="score-total">
-                  <strong>{player.score}</strong>
-                  {player.lastDelta !== null && (
-                    <small
-                      className={
-                        player.lastDelta > 0
-                          ? "positive"
-                          : player.lastDelta === 0
-                            ? "neutral"
-                            : ""
-                      }
-                    >
-                      {player.lastDelta > 0 ? "+" : ""}
-                      {player.lastDelta}
-                    </small>
-                  )}
-                </span>
-              </article>
-            ))}
-          </div>
-
-          <div className="round-track">
-            <div>
-              <span>Game path</span>
-              <small>
-                {schedule.length - roundIndex - 1} round
-                {schedule.length - roundIndex - 1 === 1 ? "" : "s"} left
-              </small>
-            </div>
-            <div className="track-line">
-              {schedule.map((size, index) => (
-                <i
-                  key={`${size}-${index}`}
-                  className={
-                    index < roundIndex
-                      ? "is-done"
-                      : index === roundIndex
-                        ? "is-current"
-                        : ""
-                  }
-                  title={`Round ${index + 1}: ${size} card${
-                    size === 1 ? "" : "s"
-                  }`}
-                />
-              ))}
-            </div>
-            <p>
-              Next:{" "}
-              <strong>
-                {schedule[roundIndex + 1]
-                  ? `${schedule[roundIndex + 1]} card${
-                      schedule[roundIndex + 1] === 1 ? "" : "s"
-                    } each`
-                  : "final scores"}
-              </strong>
-            </p>
-          </div>
-
-          <div className="score-legend">
-            <span>
-              <i>3×</i>
-              Each bid trick
-            </span>
-            <span>
-              <i>+1</i>
-              Each overtrick
-            </span>
-            <span>
-              <i>−1</i>
-              Each trick short
-            </span>
-            <span>
-              <i>±20</i>
-              Board
-            </span>
-          </div>
-        </aside>
-      </div>
-
-      {boardConfirmOpen && (
-        <ModalLayer onClose={() => setBoardConfirmOpen(false)}>
-          <section
-            className="confirm-dialog"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="board-title"
-            tabIndex={-1}
-          >
-            <span className="board-crown" aria-hidden="true">
-              ♛
-            </span>
-            <span className="eyebrow">High-risk call</span>
-            <h2 id="board-title">Take every trick?</h2>
-            <p>
-              Make Board and score <strong>+20</strong>. Lose even one trick and
-              take <strong>−20</strong>.
-            </p>
-            <div className="dialog-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setBoardConfirmOpen(false)}
-              >
-                Not this hand
-              </button>
-              <button
-                type="button"
-                className="board-confirm-button"
-                onClick={() => commitBid(currentPlayerIndex, "BOARD")}
-              >
-                Call Board
-              </button>
-            </div>
-          </section>
-        </ModalLayer>
-      )}
-
-      {phase === "round-result" && (
-        <ModalLayer strong>
-          <section
-            className="result-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="result-title"
-            tabIndex={-1}
-          >
-            <header className="result-heading">
-              <span className="result-medallion" aria-hidden="true">
-                {roundIndex + 1}
-              </span>
-              <div>
-                <span className="eyebrow">Round complete</span>
-                <h2 id="result-title">
-                  {handSize} card{handSize === 1 ? "" : "s"} played
-                </h2>
-                <p>Every promise settled. Here is how the table moved.</p>
-              </div>
+          <aside className={styles.scoreboard}>
+            <header>
+              <span>Table standings</span>
+              <strong>{room.code}</strong>
             </header>
-
-            <div
-              className="result-table-wrap"
-              role="region"
-              aria-label="Round results. Scroll horizontally for all columns."
-              tabIndex={0}
-            >
-              <table className="result-table">
-                <thead>
-                  <tr>
-                    <th>Player</th>
-                    <th>Bid</th>
-                    <th>Won</th>
-                    <th>Score</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {roundResults.map((result) => (
-                    <tr
-                      key={result.playerIndex}
-                      className={
-                        result.playerIndex === 0 ? "is-human-result" : ""
-                      }
-                    >
-                      <td>
-                        <span
-                          className={`mini-avatar ${
-                            result.playerIndex === 0 ? "is-human" : ""
-                          }`}
-                        >
-                          {result.name.slice(0, 1)}
-                        </span>
-                        <span>
-                          <strong>{result.name}</strong>
-                          <small>
-                            {scoreExplanation(
-                              result.bid,
-                              result.tricks,
-                              handSize,
-                            )}
-                          </small>
-                        </span>
-                      </td>
-                      <td>{displayBid(result.bid)}</td>
-                      <td>{result.tricks}</td>
-                      <td
-                        className={
-                          result.delta > 0
-                            ? "positive-score"
-                            : result.delta < 0
-                              ? "negative-score"
-                              : "neutral-score"
-                        }
-                      >
-                        {result.delta > 0 ? "+" : ""}
-                        {result.delta}
-                      </td>
-                      <td>
-                        <strong>{result.total}</strong>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div>
+              {[...room.players]
+                .sort(
+                  (left, right) =>
+                    right.score - left.score || left.seat - right.seat,
+                )
+                .map((player, index) => (
+                  <article
+                    key={player.id}
+                    className={
+                      player.id === room.myPlayerId ? styles.scoreMe : ""
+                    }
+                  >
+                    <i>{index + 1}</i>
+                    <span>
+                      <strong>{player.name}</strong>
+                      <small>
+                        {player.seat === room.dealerIndex
+                          ? "Dealer"
+                          : player.seat === room.currentPlayerIndex
+                            ? "On turn"
+                            : `Seat ${player.seat + 1}`}
+                      </small>
+                    </span>
+                    <b>{player.score}</b>
+                  </article>
+                ))}
             </div>
-
-            <footer className="result-footer">
+            <footer>
+              <span>Round path</span>
               <div>
-                <span>Table leader</span>
-                <strong>
-                  {standings[0]?.name} · {standings[0]?.score} points
-                </strong>
+                {room.schedule.map((size, index) => (
+                  <i
+                    key={`${size}-${index}`}
+                    className={
+                      index === room.roundIndex ? styles.currentRound : ""
+                    }
+                  >
+                    {size}
+                  </i>
+                ))}
               </div>
-              <button
-                type="button"
-                className="primary-button"
-                onClick={advanceRound}
-              >
-                {roundIndex >= schedule.length - 1
-                  ? "See final standings"
-                  : `Deal round ${roundIndex + 2}`}
-                <span aria-hidden="true">→</span>
-              </button>
             </footer>
-          </section>
-        </ModalLayer>
+          </aside>
+        </div>
       )}
 
-      {phase === "game-over" && !rulesOpen && (
-        <ModalLayer strong>
-          <section
-            className="game-over-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="game-over-title"
-            tabIndex={-1}
-          >
-            <div className="victory-rays" aria-hidden="true" />
-            <span className="victory-crown" aria-hidden="true">
-              ♛
-            </span>
-            <span className="eyebrow">Final standings</span>
-            <h2 id="game-over-title">
-              {gameWinners.length === 1
-                ? `${gameWinners[0].name} rules the table`
-                : "The table ends in a tie"}
-            </h2>
-            <p>
-              {schedule.length} rounds,{" "}
-              {schedule.reduce((total, size) => total + size, 0)} tricks, one
-              final score.
-            </p>
-
-            <div className="podium">
-              {standings.map((player, index) => (
-                <article
-                  key={player.id}
-                  className={index === 0 ? "is-winner" : ""}
-                >
-                  <span>{index + 1}</span>
-                  <i className="mini-avatar">{player.name.slice(0, 1)}</i>
-                  <strong>{player.name}</strong>
-                  <b>{player.score}</b>
-                  <small>points</small>
-                </article>
-              ))}
-            </div>
-
-            <div className="dialog-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setRulesOpen(true)}
-              >
-                Review rules
-              </button>
-              <button
-                type="button"
-                className="primary-button"
-                onClick={resetToSetup}
-              >
-                Play another game
-                <span aria-hidden="true">↻</span>
-              </button>
-            </div>
-          </section>
-        </ModalLayer>
+      {message && (
+        <div className={styles.errorToast} role="alert">
+          {message}
+        </div>
       )}
-
-      {rulesOpen && <RulesDialog onClose={() => setRulesOpen(false)} />}
     </main>
   );
 }

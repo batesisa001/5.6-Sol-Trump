@@ -25,7 +25,7 @@ async function render(pathname = "/") {
   );
 }
 
-test("server-renders the finished High Trump setup screen", async () => {
+test("server-renders multiplayer as the High Trump home screen", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -35,15 +35,30 @@ test("server-renders the finished High Trump setup screen", async () => {
     html,
     /<title>High Trump — A Rook-style trick-taking game<\/title>/i,
   );
+  assert.match(html, /Live multiplayer/);
+  assert.match(html, /Create a table/);
+  assert.match(html, /Create share code/);
+  assert.match(html, /Join a table/);
+  assert.match(html, /six-character code/i);
+  assert.match(html, /Play solo/);
+  assert.match(html, /href="\/solo"/);
+  assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);
+});
+
+test("server-renders solo play on its dedicated route", async () => {
+  const response = await render("/solo");
+  assert.equal(response.status, 200);
+
+  const html = await response.text();
   assert.match(html, /Every bid is a promise/);
   assert.match(html, /Set the stakes/);
   assert.match(html, /Play solo/);
   assert.match(html, /Play online with a share code/);
   assert.match(html, /Yellow 2/);
-  assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);
+  assert.match(html, /href="\/"/);
 });
 
-test("server-renders the multiplayer create and join experience", async () => {
+test("keeps the previous multiplayer route working", async () => {
   const response = await render("/online");
   assert.equal(response.status, 200);
 
@@ -56,8 +71,9 @@ test("server-renders the multiplayer create and join experience", async () => {
 });
 
 test("removes starter-only UI and keeps core accessibility contracts", async () => {
-  const [page, css, layout, packageJson] = await Promise.all([
+  const [page, soloPage, css, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/solo/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -65,14 +81,15 @@ test("removes starter-only UI and keeps core accessibility contracts", async () 
 
   assert.match(page, /^"use client";/);
   assert.match(page, /aria-live="polite"/);
-  assert.match(page, /aria-modal="true"/);
   assert.match(page, /getLegalCards/);
-  assert.match(page, /getTrickWinner/);
+  assert.match(soloPage, /^"use client";/);
+  assert.match(soloPage, /aria-modal="true"/);
+  assert.match(soloPage, /getTrickWinner/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.match(css, /@media \(max-width: 480px\)/);
   assert.match(layout, /High Trump — A Rook-style trick-taking game/);
   assert.doesNotMatch(
-    `${page}\n${layout}\n${packageJson}`,
+    `${page}\n${soloPage}\n${layout}\n${packageJson}`,
     /SkeletonPreview|react-loading-skeleton|codex-preview/,
   );
 

@@ -38,7 +38,8 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-The solo game is at `/`; multiplayer creation and joining are at `/online`.
+Multiplayer creation and joining are at `/`; the solo game is at `/solo`.
+The previous `/online` multiplayer route remains available for old links.
 Local multiplayer uses the D1 binding declared in `.openai/hosting.json`.
 
 ## Verify
